@@ -1,3 +1,5 @@
+import type { SubjectMaskDraft } from "../lib/subjectMask";
+import { restoredSubjectMask } from "../lib/subjectMask";
 import type { FramePlan, ImageSequenceInfo, InputType, Quality, ReshootInputInfo, ReshootSourceInfo, RuntimeEstimate, VideoInfo } from "../types/pipeline";
 
 export const TASK_WORKSPACE_STORAGE_KEY = "ooo-splat-task-workspace-v1";
@@ -47,13 +49,14 @@ export interface TaskDraft {
   error: string | null;
   errorContext?: import('../lib/pipelineError').FailureContext;
   errorAt: number | null;
+  subjectMask?: SubjectMaskDraft | null;
 }
 
 interface PersistedWorkspace {
   schemaVersion: 1;
   nextOrdinal: number;
   selected: TaskSelection;
-  drafts: Array<Pick<TaskDraft, "id" | "ordinal" | "kind" | "inputType" | "inputPath" | "quality" | "sourceProjectId" | "sourceProjectName" | "linkedProjectId" | "running" | "projectionAnswer" | "inputs" | "colmapDiscovery" | "frameSamplingFps"> & { generationPolicyVersion?: 4 | 5 | 6 | 7; autoRetryEnabled?: boolean; frameSamplingRatio?: number | null; plannerEnabled?: boolean; videoProjection?: import("../types/pipeline").VideoProjection }>;
+  drafts: Array<Pick<TaskDraft, "id" | "ordinal" | "kind" | "inputType" | "inputPath" | "quality" | "sourceProjectId" | "sourceProjectName" | "linkedProjectId" | "running" | "projectionAnswer" | "inputs" | "colmapDiscovery" | "frameSamplingFps" | "subjectMask"> & { generationPolicyVersion?: 4 | 5 | 6 | 7; autoRetryEnabled?: boolean; frameSamplingRatio?: number | null; plannerEnabled?: boolean; videoProjection?: import("../types/pipeline").VideoProjection }>;
 }
 
 const newId = () => {
@@ -168,6 +171,7 @@ export function loadTaskWorkspace(): { drafts: TaskDraft[]; selected: TaskSelect
       needsValidation: Boolean(draft.inputPath || inputs || draft.kind === "reshoot"),
       video: null, imageSequence: null, plan: null, estimate: null,
       reshootSource: null, reshootPlan: null, error: null, errorAt: null,
+      subjectMask: restoredSubjectMask(draft.subjectMask),
       });
     });
     const normalStandby = drafts.some((draft) => draft.kind === "generation" && !draft.running);
@@ -194,8 +198,8 @@ export function saveTaskWorkspace(drafts: TaskDraft[], selected: TaskSelection, 
     schemaVersion: 1,
     nextOrdinal,
     selected,
-    drafts: drafts.map(({ id, ordinal, kind, inputType, inputPath, quality, plannerEnabled, plannerDefaultPending, sourceProjectId, sourceProjectName, linkedProjectId, running, videoProjection, projectionAnswer, autoRetryEnabled, frameSamplingRatio,inputs,colmapDiscovery,frameSamplingFps,generationPolicyVersion }) => ({
-      inputs,colmapDiscovery,frameSamplingFps,generationPolicyVersion,
+    drafts: drafts.map(({ id, ordinal, kind, inputType, inputPath, quality, plannerEnabled, plannerDefaultPending, sourceProjectId, sourceProjectName, linkedProjectId, running, videoProjection, projectionAnswer, autoRetryEnabled, frameSamplingRatio,inputs,colmapDiscovery,frameSamplingFps,generationPolicyVersion,subjectMask }) => ({
+      inputs,colmapDiscovery,frameSamplingFps,generationPolicyVersion,subjectMask,
       autoRetryEnabled, frameSamplingRatio,
       videoProjection, projectionAnswer,
       id, ordinal, kind, inputType, inputPath, quality, sourceProjectId, sourceProjectName,

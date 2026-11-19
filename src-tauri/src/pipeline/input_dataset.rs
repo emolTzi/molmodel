@@ -245,7 +245,7 @@ impl PipelineRunner {
         })
         .await
         .map_err(|error| SplatError::Process(error.to_string()))??;
-        let key = serde_json::to_string(&(
+        let mut key = serde_json::to_string(&(
             "content-bound-dataset-v1",
             DATASET_DERIVATION_VERSION,
             &model_identity,
@@ -255,6 +255,10 @@ impl PipelineRunner {
             crate::video::panorama::CONVERSION_VERSION,
             native_runtime,
         ))?;
+        if let Some(mask) = &self.subject_mask {
+            key = serde_json::to_string(&(&key, "subject-mask-v1", mask))
+                .map_err(|error| SplatError::Process(error.to_string()))?;
+        }
         let signature = root.join("inputs-dataset.json");
         if let Ok(bytes) = tokio::fs::read(&signature).await {
             if let Ok((previous, dataset)) = serde_json::from_slice::<(String, Dataset)>(&bytes) {
@@ -294,6 +298,7 @@ impl PipelineRunner {
                                 .max()
                                 == Some(u64::from(dataset.max_edge));
                         if complete
+                            && self.cached_subject_masks_ready(&root)
                             && model.images.iter().all(|i| {
                                 model
                                     .cameras
@@ -621,6 +626,7 @@ impl PipelineRunner {
             1.,
             "正在校验训练图片和相机数据",
         );
+        self.attach_subject_masks(paths, &root, &authority, &mut derived)?;
         derived.validate()?;
         derived.write(&root.join("sparse/0"))?;
         let reference = order
@@ -644,6 +650,127 @@ impl PipelineRunner {
         };
         crate::project::manager::atomic_write_json(&signature, &(&key, &dataset)).await?;
         Ok(dataset)
+    }
+
+    fn cached_subject_masks_ready(&self, dataset: &Path) -> bool {
+        let Some(mask) = &self.subject_mask else {
+            return true;
+        };
+        mask.frames.iter().all(|frame| {
+            crate::pipeline::subject_mask::brush_mask_file(&frame.name)
+                .is_ok_and(|name| dataset.join("masks").join(name).is_file())
+        })
+    }
+
+    fn attach_subject_masks(
+        &self,
+        paths: &ProjectPaths,
+        dataset: &Path,
+        authority: &crate::reconstruction::direct_input::Model,
+        derived: &mut crate::reconstruction::direct_input::Model,
+    ) -> Result<()> {
+        let Some(checkpoint) = &self.subject_mask else {
+            return Ok(());
+        };
+        if derived
+            .images
+            .iter()
+            .any(|image| image.pose.name.starts_with("erp/"))
+        {
+            return Err(SplatError::Process("全景画面不能使用单物体去背景。".into()));
+        }
+        let cancel = self.process_manager.child_token();
+        crate::pipeline::subject_mask::frames_match(checkpoint, &paths.frames, &cancel)?;
+        let projects_root = paths
+            .project
+            .parent()
+            .ok_or_else(|| SplatError::Process("项目目录没有可用的上级目录来定位掩码。".into()))?;
+        let session =
+            crate::pipeline::subject_mask::session_directory(projects_root, checkpoint.session_id)?;
+        let mut masks = std::collections::HashMap::new();
+        for image in &derived.images {
+            let record = checkpoint
+                .frames
+                .iter()
+                .find(|frame| frame.name == image.pose.name)
+                .ok_or_else(|| {
+                    SplatError::Process(
+                        "训练画面没有对应的单物体掩码。请重新分割，不会退回整场景训练。".into(),
+                    )
+                })?;
+            let training = dataset.join("images").join(&image.pose.name);
+            let (width, height) = image::image_dimensions(&training)
+                .map_err(|error| SplatError::Process(error.to_string()))?;
+            let destination =
+                dataset
+                    .join("masks")
+                    .join(crate::pipeline::subject_mask::brush_mask_file(
+                        &image.pose.name,
+                    )?);
+            let source = session.join("masks").join(&record.mask);
+            if width == record.width && height == record.height {
+                crate::pipeline::subject_mask::copy_aligned_mask(
+                    &source,
+                    &destination,
+                    width,
+                    height,
+                )?;
+            } else {
+                let loaded = image::open(&source)
+                    .map_err(|error| SplatError::Process(error.to_string()))?
+                    .into_luma8();
+                if loaded.width() != record.width || loaded.height() != record.height {
+                    return Err(SplatError::Process("单物体掩码与抽帧尺寸不一致。".into()));
+                }
+                let output = derived
+                    .cameras
+                    .iter()
+                    .find(|camera| camera.id == image.pose.camera_id)
+                    .ok_or_else(|| SplatError::Process("缺少去畸变后的训练相机。".into()))?;
+                let input = authority
+                    .cameras
+                    .iter()
+                    .find(|camera| camera.id == image.pose.camera_id)
+                    .ok_or_else(|| SplatError::Process("缺少原始训练相机。".into()))?;
+                if output.model_id != 1 || output.params.len() < 4 {
+                    return Err(SplatError::Process(
+                        "去畸变后的相机不是已支持的针孔模型，单物体掩码无法逐像素对齐，已停止。"
+                            .into(),
+                    ));
+                }
+                let warped = crate::pipeline::subject_mask::resample_mask(
+                    &loaded,
+                    width,
+                    height,
+                    &cancel,
+                    |x, y| {
+                        let nx = (f64::from(x) + 0.5 - output.params[2]) / output.params[0];
+                        let ny = (f64::from(y) + 0.5 - output.params[3]) / output.params[1];
+                        project(input, nx, ny)
+                    },
+                )?;
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                warped
+                    .save_with_format(&destination, image::ImageFormat::Png)
+                    .map_err(|error| SplatError::Process(error.to_string()))?;
+            }
+            masks.insert(
+                image.pose.id,
+                image::open(&destination)
+                    .map_err(|error| SplatError::Process(error.to_string()))?
+                    .into_luma8(),
+            );
+        }
+        let filtered = crate::pipeline::subject_mask::filter_background_points(derived, &masks)?;
+        if filtered.kept == 0 {
+            return Err(SplatError::Process(
+                "主体掩码没有保留任何初始化点。请调整选区后重跑，不会用空点云或涂黑背景继续训练。"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 }
 

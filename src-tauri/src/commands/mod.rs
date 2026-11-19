@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 pub mod html_export;
 pub mod model_export;
+pub mod subject_mask;
 
 use crate::{
     engines::{
@@ -575,6 +576,7 @@ pub async fn start_gui_inputs(
     source_project_id: Option<Uuid>,
     reshoot_options: Option<crate::pipeline::reshoot::ReshootOptions>,
     gpu_selection: Option<crate::engines::gpu_selection::GpuSelection>,
+    subject_mask: Option<crate::commands::subject_mask::SubjectMaskSelection>,
 ) -> std::result::Result<crate::tasks::StartReceipt, crate::tasks::ServiceError> {
     crate::pipeline::input_admission::ensure_new_inputs_supported(&inputs)?;
     let _admission = imports.admission().await;
@@ -610,7 +612,7 @@ pub async fn start_gui_inputs(
             ));
         }
     }
-    let params = serde_json::json!({"inputs":inputs,"generationPolicy":generation_policy,"source_project_id":source_project_id,"reshootOptions":reshoot_options,"gpuSelection":gpu_selection});
+    let params = serde_json::json!({"inputs":inputs,"generationPolicy":generation_policy,"source_project_id":source_project_id,"reshootOptions":reshoot_options,"gpuSelection":gpu_selection,"subjectMask":subject_mask});
     state
         .create(
             Some(workspace_task_id),
@@ -1800,6 +1802,7 @@ pub async fn create_gui_task(
     image_matching_strategy: Option<crate::project::ImageMatchingStrategy>,
     generation_policy: Option<crate::pipeline::generation_policy::GenerationPolicy>,
     gpu_selection: Option<crate::engines::gpu_selection::GpuSelection>,
+    subject_mask: Option<crate::commands::subject_mask::SubjectMaskSelection>,
 ) -> std::result::Result<crate::tasks::TaskRecord, crate::tasks::ServiceError> {
     let video_projection = input_projection.or(video_projection);
     let video_source_identity = input_source_identity.or(video_source_identity);
@@ -1826,7 +1829,7 @@ pub async fn create_gui_task(
             planner_enabled.unwrap_or(true),
             "gui",
             None,
-            Some(serde_json::json!({"videoProjection":video_projection.unwrap_or_default(), "videoSourceIdentity":video_source_identity, "imageMatchingStrategy":image_matching_strategy.unwrap_or_default(), "generationPolicy":generation_policy.unwrap_or_default(), "gpuSelection":gpu_selection})),
+            Some(serde_json::json!({"videoProjection":video_projection.unwrap_or_default(), "videoSourceIdentity":video_source_identity, "imageMatchingStrategy":image_matching_strategy.unwrap_or_default(), "generationPolicy":generation_policy.unwrap_or_default(), "gpuSelection":gpu_selection, "subjectMask":subject_mask})),
         )
         .await
 }

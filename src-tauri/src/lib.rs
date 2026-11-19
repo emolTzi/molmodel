@@ -107,6 +107,7 @@ pub fn run_app() {
             Ok(())
         })
         .manage(mcp::McpController::default())
+        .manage(commands::subject_mask::SubjectMaskRuntime::default())
         .invoke_handler(tauri::generate_handler![
             commands::classify_material_paths,
             commands::classify_generation_paths,
@@ -115,6 +116,12 @@ pub fn run_app() {
             commands::detect_material_gps,
             commands::start_gui_inputs,
             updates::check_app_update,
+            commands::subject_mask::get_subject_mask_settings,
+            commands::subject_mask::set_subject_mask_settings,
+            commands::subject_mask::subject_mask_preflight,
+            commands::subject_mask::prepare_subject_mask,
+            commands::subject_mask::segment_subject_mask,
+            commands::subject_mask::cancel_subject_mask,
             commands::check_engines,
             commands::check_colmap_acceleration,
             commands::probe_and_plan,
