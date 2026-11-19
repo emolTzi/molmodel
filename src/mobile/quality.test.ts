@@ -64,4 +64,19 @@ describe("local reshoot suggestions", () => {
     expect(suggestions.find((item) => item.kind === "reshoot-top")?.certainty).toBe("unverified");
     expect(JSON.stringify(suggestions)).not.toMatch(/%|概率|热图/);
   });
+
+  it("does not call a flat frame and a striped frame the same photo", () => {
+    const flat = qualityFromGray(solid(20), 16, 16);
+    const busy = qualityFromGray(stripes(), 16, 16);
+    const suggestions = localSuggestions([
+      { id: "11111111-1111-4111-8111-111111111111", quality: flat },
+      { id: "22222222-2222-4222-8222-222222222222", quality: busy },
+    ], []);
+    expect(suggestions.some((item) => item.title.includes("非常接近"))).toBe(false);
+    const same = localSuggestions([
+      { id: "11111111-1111-4111-8111-111111111111", quality: flat },
+      { id: "22222222-2222-4222-8222-222222222222", quality: flat },
+    ], []);
+    expect(same.some((item) => item.title.includes("非常接近"))).toBe(true);
+  });
 });

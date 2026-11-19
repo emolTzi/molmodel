@@ -77,7 +77,11 @@ function duplicateIds(photos) {
   const found = new Set();
   for (let i = 0; i < photos.length; i += 1) {
     for (let j = i + 1; j < photos.length; j += 1) {
-      if (hammingHex(photos[i].ahash, photos[j].ahash) <= 5) {
+      const sharpScale = Math.max(photos[i].sharpness, photos[j].sharpness, 1);
+      const similar = hammingHex(photos[i].ahash, photos[j].ahash) <= 5
+        && Math.abs(photos[i].meanLuma - photos[j].meanLuma) <= 18
+        && Math.abs(photos[i].sharpness - photos[j].sharpness) / sharpScale <= 0.35;
+      if (similar) {
         found.add(photos[i].id);
         found.add(photos[j].id);
       }

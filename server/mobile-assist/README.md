@@ -16,6 +16,14 @@ npm run mobile:dev
 npm run mobile
 ```
 
+正式静态包（不含桌面重建，也不含密钥）：
+
+```bash
+npm run build:mobile
+```
+
+产物在 `dist-mobile/`。用静态服务器把这个目录当作网站根目录。手机安装 PWA 和调用相机需要 HTTPS；直接双击 zip 里的 html 不能当 PWA 相机。没有密钥时页面显示「AI 未启用」，本地检查仍可用。
+
 只开分析服务：
 
 ```bash

@@ -25,7 +25,14 @@ export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const urls = useRef(new Map<string, string>());
 
-  useEffect(() => { void refresh(); void assistStatus().then(setStatus); return () => { stream?.getTracks().forEach((track) => track.stop()); }; }, [stream]);
+  useEffect(() => {
+    void refresh();
+    void assistStatus().then(setStatus);
+  }, []);
+  useEffect(() => {
+    if (videoRef.current && stream) videoRef.current.srcObject = stream;
+    return () => { stream?.getTracks().forEach((track) => track.stop()); };
+  }, [stream]);
 
   async function refresh(project = current) {
     setProjects(await store.listProjects());
@@ -168,7 +175,8 @@ export function App() {
             {stream && <video ref={videoRef} autoPlay playsInline muted />}
             <div className="row">
               {stream ? <button type="button" onClick={() => void capture()}>拍照</button> : <button type="button" onClick={() => void startCamera()}>打开相机</button>}
-              <label className="secondary" style={{ display: "inline-block" }}>选择照片<input hidden type="file" accept="image/*" multiple onChange={(event) => { const files = [...event.target.files ?? []]; event.target.value = ""; void Promise.all(files.map((file) => addBlob(file, "file"))); }} /></label>
+              <label className="secondary" htmlFor="photo-file">选择照片</label>
+              <input id="photo-file" hidden type="file" accept="image/*" multiple onChange={(event) => { const files = [...event.target.files ?? []]; event.target.value = ""; void Promise.all(files.map((file) => addBlob(file, "file"))); }} />
               <button className="secondary" type="button" onClick={() => void simulatedFrame().then((blob) => addBlob(blob, "simulated"))}>模拟相机</button>
             </div>
             <p className="note">模拟相机只生成一张标了“开发示例，不是实拍”的图片。没有相机权限时，用“选择照片”。</p>
@@ -177,7 +185,7 @@ export function App() {
             {photos.map((photo) => (
               <figure key={photo.id}>
                 <img src={thumb(photo)} alt="" />
-                {photo.source === "simulated" && <span className="badge simulated">模拟</span>}
+                {photo.source !== "camera" && <span className="badge simulated">{photo.source === "file" ? "文件" : "模拟"}</span>}
                 <button type="button" onClick={() => void store.deletePhoto(photo.id).then(() => refresh(current))}>删除</button>
               </figure>
             ))}
@@ -192,7 +200,8 @@ export function App() {
           </section>
           <section className="card">
             <h2>模型建议</h2>
-            <p className="note">{status ? `${status.desktopReconstruction} ${status.text.configured ? "文本通道已配置。" : "没有密钥，只有本地检查。"} ${status.vision.configured ? "视觉通道已配置。" : status.vision.reason ?? ""}` : "分析服务未启动。本地检查不需要它。"}</p>
+            <p className="badge" role="status">{aiLabel(status)}</p>
+            <p className="note">{status?.desktopReconstruction ?? "COLMAP、Brush 与 SAM 2 仍在桌面。手机不训练三维模型。"} 看图也只能评价已上传的缩略图，不能识别没拍到的区域。</p>
             <label className="check"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />我同意本次分析。文本模式只上传清晰度、亮度和哈希；视觉模式额外上传当前 {photos.length} 张缩略图，不上传原始定位信息。</label>
             <div className="row">
               <button type="button" disabled={busy || !status?.text.configured || !photos.length} onClick={() => void runModel("text")}>文本建议，不识图</button>
@@ -214,6 +223,13 @@ export function App() {
       )}
     </main>
   );
+}
+
+function aiLabel(status: AssistStatus | null): string {
+  if (!status) return "AI 未启用";
+  if (status.vision.configured) return `视觉通道已配置：${status.vision.model ?? "未命名模型"}`;
+  if (status.text.configured) return "仅文本通道已配置，本次不识图";
+  return "AI 未启用";
 }
 
 function blobBase64(blob: Blob): Promise<string> {

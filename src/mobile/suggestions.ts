@@ -53,7 +53,10 @@ export function localSuggestions(
       const right = photos[other].quality;
       if (!left || !right) continue;
       const distance = hammingHex(left.ahash, right.ahash);
-      if (distance <= DUPLICATE_HAMMING_MAX) {
+      const lumaGap = Math.abs(left.meanLuma - right.meanLuma);
+      const sharpGap = Math.abs(left.sharpness - right.sharpness);
+      const sharpScale = Math.max(left.sharpness, right.sharpness, 1);
+      if (distance <= DUPLICATE_HAMMING_MAX && lumaGap <= 18 && sharpGap / sharpScale <= 0.35) {
         suggestions.push({
           id: `dup-${photos[index].id}-${photos[other].id}`,
           kind: "note",
