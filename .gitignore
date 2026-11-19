@@ -8,6 +8,8 @@ src-tauri/gen/
 .vscode/
 *.log
 *.tmp
+__pycache__/
+*.pyc
 .DS_Store
 .cargo-home/
 .npm-cache/
