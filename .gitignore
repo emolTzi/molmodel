@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-mobile/
 *.tsbuildinfo
 target/
 src-tauri/target/
@@ -11,6 +12,7 @@ src-tauri/gen/
 .DS_Store
 .cargo-home/
 .npm-cache/
+server/mobile-assist/.env
 .tmp/
 
 # Downloaded archives, extraction caches, and local diagnostics are never committed.

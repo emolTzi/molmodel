@@ -46,7 +46,12 @@
     "build:bundle": "npm run clean:tauri-engine-resources && npm run build:html-viewer && npm run verify:bundle-resources && npm run verify:engines && npm run verify:licenses && npm run build",
     "build:bundle:windows": "npm run clean:tauri-engine-resources && npm run build:html-viewer && npm run verify:bundle-resources && npm run verify:engines:windows && npm run verify:licenses:windows && npm run build",
     "package:windows": "npm run verify:telemetry:release && npm run tauri -- build --bundles nsis && node scripts/collect-windows-installer.mjs",
-    "test": "vitest run && npm run test:diagnostics",
+    "test": "vitest run && npm run test:diagnostics && npm run test:mobile-server",
+    "build:mobile": "node scripts/build-mobile.mjs",
+    "mobile": "vite --config vite.mobile.config.ts --host 127.0.0.1",
+    "mobile:server": "node server/mobile-assist/server.mjs",
+    "mobile:dev": "node scripts/mobile-dev.mjs",
+    "test:mobile-server": "node --test server/mobile-assist/analyze.test.mjs",
     "test:diagnostics": "node --experimental-strip-types --test server/diagnostics/report.node-test.ts",
     "test:watch": "vitest",
     "tauri": "tauri"
