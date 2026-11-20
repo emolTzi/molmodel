@@ -1421,7 +1421,7 @@ export function GaussianViewer({ previewSessionId, onExit, onDisposed, pipelineR
     htmlCancelRef.current = true;
     if (htmlSessionRef.current) void cancelGaussianHtmlExport(htmlSessionRef.current.exportId).catch((error: unknown) => setHtmlError(String(error)));
   };
-  const exportHtml = async () => {
+  const exportHtml = async (layout: "directory" | "single") => {
     if (!store.descriptor || !sceneApiRef.current || exportBusyRef.current) return;
     exportBusyRef.current = true;
     htmlCancelRef.current = false;
@@ -1432,7 +1432,7 @@ export function GaussianViewer({ previewSessionId, onExit, onDisposed, pipelineR
       const current = useGaussianTransformStore.getState();
       if (current.saveState === "error") throw new Error(current.saveError ?? t("viewer.editsUnsaved"));
       if (htmlCancelRef.current) return;
-      const session = await beginGaussianHtmlExport(store.descriptor.projectId, current.editing.revision, sceneApiRef.current.snapshotView(), locale);
+      const session = await beginGaussianHtmlExport(store.descriptor.projectId, current.editing.revision, sceneApiRef.current.snapshotView(), locale, layout);
       htmlSessionRef.current = session;
       if (htmlCancelRef.current) { await cancelGaussianHtmlExport(session.exportId); return; }
       const result = await commitGaussianHtmlExport(session.exportId);
@@ -1865,7 +1865,7 @@ export function GaussianViewer({ previewSessionId, onExit, onDisposed, pipelineR
       format={modelFormat}
     />
     {htmlConfirm && <div className="gaussian-save-backdrop" role="dialog" aria-modal="true" aria-labelledby="html-export-title" aria-describedby="html-export-description" onKeyDown={event => { if(event.key === "Escape")setHtmlConfirm(false); }}>
-      <div className="gaussian-save-dialog"><div className="gaussian-save-symbol"><FileCode2 size={19} /></div><div><h2 id="html-export-title">{t("export.html")}</h2><p id="html-export-description">{t("export.htmlWarning", {size:formatBytes(Math.ceil(store.descriptor.fileSize*4/3),locale)})}</p></div><div className="gaussian-save-actions"><button autoFocus type="button" className="secondary" onClick={() => setHtmlConfirm(false)}>{t("common.cancel")}</button><button type="button" className="primary" onClick={() => void exportHtml()}><Download size={14} />{t("export.label")}</button></div></div>
+      <div className="gaussian-save-dialog"><div className="gaussian-save-symbol"><FileCode2 size={19} /></div><div><h2 id="html-export-title">{t("export.html")}</h2><p id="html-export-description">{t("export.htmlWarning", {size:formatBytes(Math.ceil(store.descriptor.fileSize*4/3),locale)})}</p></div><div className="gaussian-save-actions"><button autoFocus type="button" className="secondary" onClick={() => setHtmlConfirm(false)}>{t("common.cancel")}</button><button type="button" className="secondary" onClick={() => void exportHtml("single")}>{t("export.single")}</button><button type="button" className="primary" onClick={() => void exportHtml("directory")}><Download size={14} />{t("export.site")}</button></div></div>
     </div>}
     {pendingNavigation && <div className="gaussian-save-backdrop" role="dialog" aria-modal="true" aria-labelledby="gaussian-save-title" aria-describedby="gaussian-save-description" onKeyDown={event => { if (event.key === "Escape" && !navigationSaving) setPendingNavigation(null); }}>
       <div className="gaussian-save-dialog">

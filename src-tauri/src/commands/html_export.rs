@@ -30,6 +30,14 @@ pub enum HtmlLocale {
     English,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum HtmlLayout {
+    #[serde(rename = "directory")]
+    Directory,
+    #[serde(rename = "single")]
+    Single,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HtmlView {
@@ -102,6 +110,7 @@ pub(super) struct HtmlExportSession {
     transform: GaussianTransform,
     view: HtmlView,
     locale: HtmlLocale,
+    layout: HtmlLayout,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,6 +133,19 @@ fn next_html_path(root: &Path) -> PathBuf {
             "preview.html".into()
         } else {
             format!("preview-{n}.html")
+        });
+        if !path.exists() {
+            return path;
+        }
+    }
+    unreachable!()
+}
+fn next_site_dir(root: &Path) -> PathBuf {
+    for n in 1_u64.. {
+        let path = root.join(if n == 1 {
+            "preview-site".into()
+        } else {
+            format!("preview-site-{n}")
         });
         if !path.exists() {
             return path;
@@ -157,6 +179,7 @@ pub async fn begin_gaussian_html_export(
     edit_revision: u64,
     view: HtmlView,
     locale: HtmlLocale,
+    layout: HtmlLayout,
 ) -> Result<GaussianVideoExportReservation> {
     view.validate()?;
     let _lifecycle = state.lifecycle.lock().await;
@@ -190,7 +213,10 @@ pub async fn begin_gaussian_html_export(
         ));
     }
     let export_id = Uuid::new_v4();
-    let destination = next_html_path(&root);
+    let destination = match layout {
+        HtmlLayout::Single => next_html_path(&root),
+        HtmlLayout::Directory => next_site_dir(&root),
+    };
     *slot = Some(HtmlExportSession {
         export_id,
         project_id: id,
@@ -202,6 +228,7 @@ pub async fn begin_gaussian_html_export(
         transform: metadata.transform,
         view,
         locale,
+        layout,
     });
     Ok(GaussianVideoExportReservation {
         export_id,
@@ -290,6 +317,9 @@ async fn run_export(
         let html = session
             .root
             .join(format!(".ooosplat-html-{}.html.tmp", session.export_id));
+        let site = session
+            .root
+            .join(format!(".ooosplat-site-{}", session.export_id));
         let mut last_progress = None;
         let mut progress = |phase: &'static str, p: f64| {
             let key = (phase, p.floor() as u32);
@@ -307,9 +337,18 @@ async fn run_export(
         };
         let result = (|| {
             progress("model", 0.0);
+            let model_path = if session.layout == HtmlLayout::Directory {
+                if site.exists() {
+                    std::fs::remove_dir_all(&site)?;
+                }
+                std::fs::create_dir(&site)?;
+                site.join("model.ply")
+            } else {
+                model.clone()
+            };
             let info = export_transformed_ply_to(
                 &source,
-                &model,
+                &model_path,
                 session.transform,
                 GaussianExportEdits {
                     crop: editing.crop,
@@ -319,29 +358,61 @@ async fn run_export(
                 || cancelled(&session.cancel),
             )?;
             progress("packing", 45.0);
-            write_html(
-                &model,
-                &html,
-                &runtime,
-                &session.view,
-                session.locale,
-                &info,
-                &session.cancel,
-                |done, total| progress("packing", 45.0 + done as f64 / total.max(1) as f64 * 54.0),
-            )?;
-            cancelled(&session.cancel)?;
-            // Same-volume hard link publishes a complete file atomically without
-            // overwriting an existing user file, unlike rename on Unix.
-            publish_html_file(&html, &session.destination)?;
+            let published = match session.layout {
+                HtmlLayout::Single => {
+                    write_html(
+                        &model_path,
+                        &html,
+                        &runtime,
+                        &session.view,
+                        session.locale,
+                        &info,
+                        &session.cancel,
+                        |done, total| {
+                            progress("packing", 45.0 + done as f64 / total.max(1) as f64 * 54.0)
+                        },
+                    )?;
+                    cancelled(&session.cancel)?;
+                    // Same-volume hard link publishes a complete file atomically without
+                    // overwriting an existing user file, unlike rename on Unix.
+                    publish_html_file(&html, &session.destination)?;
+                    HtmlExportResult {
+                        path: preview_client_path(&session.destination),
+                        file_size: std::fs::metadata(&session.destination)?.len(),
+                        splat_count: info.splat_count,
+                    }
+                }
+                HtmlLayout::Directory => {
+                    write_site_index(
+                        &site,
+                        &runtime,
+                        &session.view,
+                        session.locale,
+                        &info,
+                        &session.cancel,
+                    )?;
+                    cancelled(&session.cancel)?;
+                    if session.destination.exists() {
+                        return Err(SplatError::Process(
+                            "HTML site destination already exists".into(),
+                        ));
+                    }
+                    std::fs::rename(&site, &session.destination)?;
+                    HtmlExportResult {
+                        path: preview_client_path(&session.destination.join("index.html")),
+                        file_size: directory_size(&session.destination)?,
+                        splat_count: info.splat_count,
+                    }
+                }
+            };
             progress("completed", 100.0);
-            Ok(HtmlExportResult {
-                path: preview_client_path(&session.destination),
-                file_size: std::fs::metadata(&session.destination)?.len(),
-                splat_count: info.splat_count,
-            })
+            Ok(published)
         })();
         let _ = std::fs::remove_file(&model);
         let _ = std::fs::remove_file(&html);
+        if site.exists() {
+            let _ = std::fs::remove_dir_all(&site);
+        }
         result
     })
     .await
@@ -480,6 +551,66 @@ fn write_html(
     encode_base64(&runtime_bytes, &mut encoded);
     writer.write_all(&encoded)?;
     writer.write_all(b"</script><script>const r=document.getElementById('viewer-runtime');const s=document.createElement('script');s.textContent=new TextDecoder().decode(Uint8Array.from(atob(r.textContent),c=>c.charCodeAt(0)));r.remove();document.body.append(s);</script><details id=\"licenses\"><summary>Licenses</summary><pre>")?;
+    for text in [
+        include_str!("../../../licenses/PlayCanvas-MIT.txt"),
+        include_str!("../../../LICENSE"),
+        include_str!("../../../NOTICE"),
+    ] {
+        writer.write_all(
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .as_bytes(),
+        )?;
+    }
+    writer.write_all(b"</pre></details></body></html>")?;
+    writer.flush()?;
+    writer.get_ref().sync_all()?;
+    Ok(())
+}
+
+fn directory_size(root: &Path) -> Result<u64> {
+    let mut total = 0_u64;
+    for name in ["index.html", "model.ply", "runtime.js"] {
+        total += std::fs::metadata(root.join(name))?.len();
+    }
+    Ok(total)
+}
+
+fn write_site_index(
+    output_dir: &Path,
+    runtime: &Path,
+    view: &HtmlView,
+    locale: HtmlLocale,
+    info: &PlyInfo,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    cancelled(cancel)?;
+    let runtime_len = std::fs::metadata(runtime)?.len();
+    if runtime_len > 16 * 1024 * 1024 {
+        return Err(SplatError::Process(
+            "Offline runtime exceeds safety limit".into(),
+        ));
+    }
+    std::fs::copy(runtime, output_dir.join("runtime.js"))?;
+    let mut writer = BufWriter::new(
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(output_dir.join("index.html"))?,
+    );
+    let language = match locale {
+        HtmlLocale::Chinese => "zh-CN",
+        HtmlLocale::English => "en",
+    };
+    write!(writer,"<!doctype html><html lang=\"{language}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>OOOSplat Preview</title><style>{}</style></head><body>",include_str!("../../../html-viewer/style.css"))?;
+    writer.write_all(include_str!("../../../html-viewer/body.html").as_bytes())?;
+    write!(
+        writer,
+        "<script type=\"application/json\" id=\"viewer-config\">{}</script><script src=\"./runtime.js\"></script>",
+        safe_json(&serde_json::json!({"view":view,"locale":locale,"splatCount":info.splat_count,"modelUrl":"model.ply"}))?
+    )?;
+    writer.write_all(b"<details id=\"licenses\"><summary>Licenses</summary><pre>")?;
     for text in [
         include_str!("../../../licenses/PlayCanvas-MIT.txt"),
         include_str!("../../../LICENSE"),
@@ -647,6 +778,7 @@ mod tests {
             transform: GaussianTransform::default(),
             view: view(),
             locale: HtmlLocale::English,
+            layout: HtmlLayout::Single,
         });
         assert!(claim_session(&mut slot, Uuid::new_v4()).is_err());
         assert!(!slot.as_ref().unwrap().running);
@@ -686,6 +818,60 @@ mod tests {
         assert!(!html.contains(dir.path().to_str().unwrap()));
         assert_eq!(std::fs::read(&model).unwrap(), bytes);
         assert_eq!(updates.last(), Some(&(info.file_size, info.file_size)));
+    }
+    #[test]
+    fn directory_site_keeps_the_ply_bytes_and_is_smaller_than_base64_html() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("source.ply");
+        let runtime = dir.path().join("runtime.js");
+        let bytes = b"ply-bytes-not-base64".to_vec();
+        std::fs::write(&model, &bytes).unwrap();
+        std::fs::write(&runtime, b"console.log('offline');").unwrap();
+        let info = PlyInfo {
+            file_size: bytes.len() as u64,
+            splat_count: 1,
+        };
+        let site = dir.path().join("preview-site");
+        std::fs::create_dir(&site).unwrap();
+        std::fs::copy(&model, site.join("model.ply")).unwrap();
+        write_site_index(
+            &site,
+            &runtime,
+            &view(),
+            HtmlLocale::Chinese,
+            &info,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(site.join("model.ply")).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(site.join("runtime.js")).unwrap(),
+            b"console.log('offline');"
+        );
+        let index = std::fs::read_to_string(site.join("index.html")).unwrap();
+        assert!(index.contains("\"modelUrl\":\"model.ply\""));
+        assert!(index.contains("src=\"./runtime.js\""));
+        assert!(!index.contains("src=\"http") && !index.contains("src=\"//"));
+        assert!(!index.contains("ply-bytes-not-base64"));
+        let single = dir.path().join("preview.html");
+        write_html(
+            &model,
+            &single,
+            &runtime,
+            &view(),
+            HtmlLocale::Chinese,
+            &info,
+            &CancellationToken::new(),
+            |_, _| {},
+        )
+        .unwrap();
+        let html = std::fs::read(&single).unwrap();
+        let mut encoded = Vec::new();
+        encode_base64(&bytes, &mut encoded);
+        assert!(html.windows(encoded.len()).any(|window| window == encoded));
+        assert!(html.len() as u64 > bytes.len() as u64 + runtime.metadata().unwrap().len());
+        assert_eq!(encoded.len(), bytes.len().div_ceil(3) * 4);
+        assert!(next_site_dir(dir.path()).ends_with("preview-site-2"));
     }
     #[test]
     fn cancelled_html_does_not_create_a_file() {
@@ -770,6 +956,21 @@ mod tests {
             )
             .unwrap();
         }
+        let site = root.join("sample-site");
+        if site.exists() {
+            std::fs::remove_dir_all(&site).unwrap();
+        }
+        std::fs::create_dir(&site).unwrap();
+        std::fs::copy(&model, site.join("model.ply")).unwrap();
+        write_site_index(
+            &site,
+            &root.join("runtime.js"),
+            &view(),
+            HtmlLocale::English,
+            &inspect_gaussian_ply(&model).unwrap(),
+            &CancellationToken::new(),
+        )
+        .unwrap();
         let html = std::fs::read_to_string(root.join("sample-zh.html")).unwrap();
         std::fs::write(
             root.join("sample-webgl.html"),

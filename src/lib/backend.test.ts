@@ -82,7 +82,7 @@ describe("backend browser guards", () => {
     await beginGaussianVideoExport("id");expect(mocks.invoke).toHaveBeenLastCalledWith("begin_gaussian_video_export",{projectId:"id",orientation:"portrait"});
     await beginGaussianVideoExport("id","landscape");expect(mocks.invoke).toHaveBeenLastCalledWith("begin_gaussian_video_export",{projectId:"id",orientation:"landscape"});
     const view={target:[0,0,0] as [number,number,number],yaw:0,pitch:0,distance:5,horizontalFrameOffset:0,projection:0,orthoHeight:5,orthographicView:null,fov:52,nearClip:0.01,farClip:10000};
-    await beginGaussianHtmlExport("id",4,view,"en");expect(mocks.invoke).toHaveBeenLastCalledWith("begin_gaussian_html_export",{projectId:"id",editRevision:4,view,locale:"en"});
+    await beginGaussianHtmlExport("id",4,view,"en","directory");expect(mocks.invoke).toHaveBeenLastCalledWith("begin_gaussian_html_export",{projectId:"id",editRevision:4,view,locale:"en",layout:"directory"});
     await commitGaussianHtmlExport("token");expect(mocks.invoke).toHaveBeenLastCalledWith("commit_gaussian_html_export",{exportId:"token"});
     await cancelGaussianHtmlExport("token");expect(mocks.invoke).toHaveBeenLastCalledWith("cancel_gaussian_html_export",{exportId:"token"});
   });

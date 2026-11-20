@@ -35,7 +35,7 @@ describe("preview export controls", () => {
         await click("标准 PLY");
         expect(container.querySelector("#preview-export-options")).toBeNull();
         await click("导出");
-        await click("导出离线 HTML");
+        await click("导出查看网站");
         expect(onHtml).toHaveBeenCalledOnce();
         expect(container.querySelector("#preview-export-options")).toBeNull();
     });
@@ -43,9 +43,9 @@ describe("preview export controls", () => {
         await act(async () => root.render(<LanguageProvider><PreviewExportMenu mode="preview" disabled={false} videoSupported={false} videoReason="unsupported" onVideo={vi.fn()} onHtml={vi.fn()} onModel={vi.fn()}/></LanguageProvider>));
         await click("导出");
         expect(button("导出视频").disabled).toBe(true);
-        expect(button("导出离线 HTML").disabled).toBe(false);
+        expect(button("导出查看网站").disabled).toBe(false);
         expect(button("标准 PLY").disabled).toBe(false);
-        await act(async () => button("导出离线 HTML").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+        await act(async () => button("导出查看网站").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
         expect(container.querySelector("#preview-export-options")).toBeNull();
         expect(document.activeElement).toBe(button("导出"));
     });
@@ -73,7 +73,7 @@ describe("preview export controls", () => {
         await act(async () => root.render(<LanguageProvider><PreviewExportMenu mode="preview" disabled={false} videoSupported videoReason={null} onVideo={vi.fn()} onHtml={vi.fn()} onModel={vi.fn()}/></LanguageProvider>));
         await click("Export");
         expect(button("Export video")).toBeDefined();
-        expect(button("Export offline HTML")).toBeDefined();
+        expect(button("Export viewer site")).toBeDefined();
         expect(button("Standard PLY")).toBeDefined();
     });
     it("navigates formats without starting an export until selection", async () => {

@@ -4,12 +4,15 @@ import { PREVIEW_ANIMATION_GLSL, PREVIEW_ANIMATION_WGSL, animationEffectsActive,
 import type { GaussianHtmlView } from "../src/types/pipeline";
 import logo from "../assets/app-icon.svg?raw";
 import { configureViewerResolution } from "./resolution";
+import { offlineModelUrl } from "./modelSource";
 import { configurePreviewRenderer } from "../src/components/GaussianViewer/PreviewBackend";
 import { PreviewSortCoordinator } from "../src/components/GaussianViewer/PreviewSortCoordinator";
+import { PreviewRenderScheduler, requestPreviewRender } from "../src/components/GaussianViewer/PreviewRenderScheduler";
 const config = JSON.parse(document.getElementById("viewer-config")!.textContent!) as {
     locale: "zh-CN" | "en";
     view: GaussianHtmlView;
     splatCount: number;
+    modelUrl?: string;
 };
 const zh = config.locale === "zh-CN";
 const labels = zh ? { play: "播放动画", pause: "暂停", replay: "重播", reset: "恢复初始视角", loading: "正在加载模型", init: "正在初始化图形渲染器", failure: "无法打开预览", help: "模型可能超出浏览器或设备能力。请关闭其他占用内存的程序，更新显卡驱动后重新打开。", controls: "左键旋转 · 右键平移 · 滚轮缩放", lost: "图形设备已中断，请重新打开此文件。" } : { play: "Play animation", pause: "Pause", replay: "Replay", reset: "Reset view", loading: "Loading model", init: "Initializing graphics renderer", failure: "Preview unavailable", help: "This model may exceed your browser or device capacity. Close other memory-intensive apps, update your graphics driver, then reopen this file.", controls: "Left: rotate · Right: pan · Wheel: zoom", lost: "The graphics device was lost. Reopen this file to retry." };
@@ -82,41 +85,48 @@ async function boot() {
     app = new Application(canvas, { graphicsDevice: device });
     app.scene.gsplatCentersEnabled = true;
     configurePreviewRenderer(app);
-    sorting = new PreviewSortCoordinator(app);
+    // Match the desktop preview: colorUpdateAngle 0 refreshes spherical harmonics
+    // on any camera translation. A degree threshold would skip SH updates.
     app.scene.gsplat.colorUpdateAngle = 0;
+    const scheduler = new PreviewRenderScheduler(app);
+    sorting = new PreviewSortCoordinator(app, () => scheduler.forceFrames());
     device.on("devicelost", () => fail(labels.lost));
     releaseResolution = configureViewerResolution(app);
     const camera = new Entity("Camera");
     camera.addComponent("camera", { clearColor: new Color(0.055, 0.067, 0.09), fov: config.view.fov, nearClip: config.view.nearClip, farClip: config.view.farClip, gammaCorrection: GAMMA_SRGB, toneMapping: TONEMAP_LINEAR });
     app.root.addChild(camera);
-    controls = new ViewerControls(canvas, camera);
+    controls = new ViewerControls(canvas, camera, undefined, zh ? "无法创建相机。" : "The preview camera is unavailable.", undefined, () => requestPreviewRender(app!));
     controls.restore(config.view);
     title.textContent = labels.loading;
-    const chunks = Array.from(document.querySelectorAll<HTMLScriptElement>("[data-ply-chunk]"));
-    const parts: BlobPart[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-        if (disposed)
-            return;
-        const binary = atob(chunks[i].textContent!);
-        const bytes = new Uint8Array(binary.length);
-        for (let j = 0; j < binary.length; j++)
-            bytes[j] = binary.charCodeAt(j);
-        parts.push(bytes);
-        chunks[i].textContent = "";
-        chunks[i].remove();
-        detail.textContent = `${Math.round((i + 1) / chunks.length * 50)}%`;
-        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const modelHref = offlineModelUrl(config.modelUrl, document.baseURI);
+    if (!modelHref) {
+        const chunks = Array.from(document.querySelectorAll<HTMLScriptElement>("[data-ply-chunk]"));
+        const parts: BlobPart[] = [];
+        for (let i = 0; i < chunks.length; i++) {
+            if (disposed)
+                return;
+            const binary = atob(chunks[i].textContent!);
+            const bytes = new Uint8Array(binary.length);
+            for (let j = 0; j < binary.length; j++)
+                bytes[j] = binary.charCodeAt(j);
+            parts.push(bytes);
+            chunks[i].textContent = "";
+            chunks[i].remove();
+            detail.textContent = `${Math.round((i + 1) / chunks.length * 50)}%`;
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        }
+        objectUrl = URL.createObjectURL(new Blob(parts, { type: "application/octet-stream" }));
+        parts.length = 0;
     }
-    objectUrl = URL.createObjectURL(new Blob(parts, { type: "application/octet-stream" }));
-    parts.length = 0;
-    asset = new Asset("Gaussian model", "gsplat", { url: objectUrl, filename: "model.ply" }, { reorder: false });
+    asset = new Asset("Gaussian model", "gsplat", { url: modelHref ?? objectUrl!, filename: "model.ply" }, { reorder: false });
     app.assets.add(asset);
     asset.on("progress", (received: number, total: number) => { if (total > 0)
         detail.textContent = `${Math.round(50 + received / total * 50)}%`; });
     await new Promise<void>((resolve, reject) => { asset!.once("load", resolve); asset!.once("error", reject); app!.assets.load(asset!); });
     if (disposed)
         return;
-    URL.revokeObjectURL(objectUrl);
+    if (objectUrl)
+        URL.revokeObjectURL(objectUrl);
     objectUrl = undefined;
     const splat = new Entity("Gaussian model");
     splat.setLocalEulerAngles(0, 0, 180);
@@ -142,7 +152,7 @@ async function boot() {
     component.setParameter("uOoosplatCropRadius", 1);
     component.setParameter("uOoosplatCropInverted", 0);
     component.setParameter("uOoosplatShowSelection", 0);
-    function uniforms(enabled: boolean) { component.setParameter("uOoosplatAnimationEnabled", enabled ? 1 : 0); component.setParameter("uOoosplatAnimationTime", elapsed); component.workBufferUpdate = enabled && animationEffectsActive(elapsed) ? WORKBUFFER_UPDATE_ALWAYS : WORKBUFFER_UPDATE_ONCE; app!.renderNextFrame = true; }
+    function uniforms(enabled: boolean) { component.setParameter("uOoosplatAnimationEnabled", enabled ? 1 : 0); component.setParameter("uOoosplatAnimationTime", elapsed); component.workBufferUpdate = enabled && animationEffectsActive(elapsed) ? WORKBUFFER_UPDATE_ALWAYS : WORKBUFFER_UPDATE_ONCE; scheduler.setAnimating(enabled); requestPreviewRender(app!); }
     uniforms(false);
     play.onclick = () => { if (playing) {
         pause();
