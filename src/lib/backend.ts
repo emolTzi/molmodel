@@ -219,8 +219,8 @@ export async function commitGaussianVideoExport(exportId: string, bytes: Uint8Ar
 }
 export async function cancelGaussianVideoExport(exportId: string): Promise<void> { return invoke("cancel_gaussian_video_export", { exportId }); }
 
-export async function beginGaussianHtmlExport(projectId: string, editRevision: number, view: import("../types/pipeline").GaussianHtmlView, locale: string): Promise<GaussianVideoExportSession> {
-  return invoke("begin_gaussian_html_export", { projectId, editRevision, view, locale });
+export async function beginGaussianHtmlExport(projectId: string, editRevision: number, view: import("../types/pipeline").GaussianHtmlView, locale: string, layout: "directory" | "single"): Promise<GaussianVideoExportSession> {
+  return invoke("begin_gaussian_html_export", { projectId, editRevision, view, locale, layout });
 }
 export async function commitGaussianHtmlExport(exportId: string): Promise<import("../types/pipeline").GaussianHtmlExportResult> { return invoke("commit_gaussian_html_export", { exportId }); }
 export async function cancelGaussianHtmlExport(exportId: string): Promise<void> { return invoke("cancel_gaussian_html_export", { exportId }); }
