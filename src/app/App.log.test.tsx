@@ -16,6 +16,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/backend", () => ({
+  getSubjectMaskSettings: vi.fn(async () => ({ python: "python", checkpoint: "", modelCfg: "configs/sam2.1/sam2.1_hiera_t.yaml" })),
+  saveSubjectMaskSettings: vi.fn(async (settings: unknown) => settings),
+  subjectMaskPreflight: vi.fn(async () => ({ ok: false, message: "unavailable" })),
+  prepareSubjectMask: vi.fn(),
+  segmentSubjectMask: vi.fn(),
+  cancelSubjectMask: vi.fn(),
   cancelPipeline: vi.fn(),
   checkEngines: vi.fn().mockResolvedValue([]),
   checkColmapAcceleration: vi.fn().mockResolvedValue(null),
