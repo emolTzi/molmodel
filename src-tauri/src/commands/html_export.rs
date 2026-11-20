@@ -870,7 +870,7 @@ mod tests {
         encode_base64(&bytes, &mut encoded);
         assert!(html.windows(encoded.len()).any(|window| window == encoded));
         assert!(html.len() as u64 > bytes.len() as u64 + runtime.metadata().unwrap().len());
-        assert_eq!(encoded.len(), ((bytes.len() + 2) / 3) * 4);
+        assert_eq!(encoded.len(), bytes.len().div_ceil(3) * 4);
         assert!(next_site_dir(dir.path()).ends_with("preview-site-2"));
     }
     #[test]
