@@ -170,6 +170,26 @@ pub struct AppSettings {
     pub planner_enabled: bool,
     #[serde(default)]
     pub hardware: HardwareSettings,
+    #[serde(default)]
+    pub subject_mask: SubjectMaskSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectMaskSettings {
+    pub python: String,
+    pub checkpoint: String,
+    pub model_cfg: String,
+}
+
+impl Default for SubjectMaskSettings {
+    fn default() -> Self {
+        Self {
+            python: "python".into(),
+            checkpoint: String::new(),
+            model_cfg: "configs/sam2.1/sam2.1_hiera_t.yaml".into(),
+        }
+    }
 }
 
 const fn default_planner_enabled() -> bool {
@@ -356,6 +376,7 @@ pub async fn load_settings() -> Result<AppSettings> {
         projects_root: default_projects_root()?,
         planner_enabled: true,
         hardware: HardwareSettings::default(),
+        subject_mask: SubjectMaskSettings::default(),
     })
 }
 
@@ -373,6 +394,29 @@ pub async fn save_projects_root(root: PathBuf) -> Result<AppSettings> {
     let _guard = SETTINGS_LOCK.lock().await;
     let mut settings = load_settings().await?;
     settings.projects_root = root;
+    save_settings_unlocked(&settings).await?;
+    Ok(settings)
+}
+
+pub async fn save_subject_mask_settings(subject_mask: SubjectMaskSettings) -> Result<AppSettings> {
+    if subject_mask.python.is_empty()
+        || subject_mask.python.len() > 300
+        || subject_mask.model_cfg.is_empty()
+        || subject_mask.model_cfg.len() > 200
+        || subject_mask
+            .python
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '&' | '|' | ';' | '`' | '\n'))
+        || subject_mask.model_cfg.chars().any(|c| c.is_control())
+        || subject_mask.checkpoint.chars().any(|c| c.is_control())
+    {
+        return Err(SplatError::Process(
+            "单物体分割的 Python 或权重路径无效。".into(),
+        ));
+    }
+    let _guard = SETTINGS_LOCK.lock().await;
+    let mut settings = load_settings().await?;
+    settings.subject_mask = subject_mask;
     save_settings_unlocked(&settings).await?;
     Ok(settings)
 }
@@ -904,6 +948,7 @@ mod tests {
             planner_enabled: true,
             hardware: HardwareSettings::default(),
             projects_root: PathBuf::from("C:/项目 Root"),
+            subject_mask: SubjectMaskSettings::default(),
         };
         assert!(serde_json::to_string(&value)
             .unwrap()

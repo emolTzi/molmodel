@@ -1099,5 +1099,16 @@ h1, h2 { margin: 0; font: 650 29px/1 "Bahnschrift", "Microsoft YaHei UI", sans-s
   .material-order-options { grid-template-columns: 1fr; }
   .colmap-path { grid-template-columns: 1fr; gap: 2px; }
 }
+.subject-mask-body { display: grid; gap: 8px; margin-top: 8px; }
+.subject-mask-body label { display: grid; gap: 4px; font-size: 12px; }
+.subject-mask-body input { min-width: 0; }
+.subject-mask-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.subject-mask-frame { position: relative; max-width: 420px; }
+.subject-mask-frame img { width: 100%; display: block; }
+.subject-mask-frame i { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 2px solid white; }
+.subject-mask-frame i.fg { background: #2f9e44; }
+.subject-mask-frame i.bg { background: #e03131; }
+.subject-mask-pair { display: flex; gap: 8px; }
+.subject-mask-pair img { width: 160px; background: #111; }
 .legacy-source-log > summary { cursor: pointer; color: inherit; padding: 7px 10px; font-family: var(--font-mono, monospace); }
 .legacy-source-log { border-top: 1px solid #384252; }

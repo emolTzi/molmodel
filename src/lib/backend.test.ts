@@ -55,7 +55,7 @@ describe("backend browser guards", () => {
     const result = { projectId: 'project' };
     mocks.invoke.mockResolvedValueOnce({ task_id: 'task' }).mockResolvedValueOnce({ accepted: true, task_id: 'task', run_id: 'run', status: 'starting', revision: 1 }).mockResolvedValueOnce({ task_id: 'task', run_id: 'run', revision: 1, status: 'completed', result });
     await expect(startPipeline('E:/photos', 'balanced', 'E:/projects', true, 'draft', 'equirectangular', 'identity', imageMatchingStrategy)).resolves.toEqual(result);
-    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'create_gui_task', { path: 'E:/photos', quality: 'balanced', projectsRoot: 'E:/projects', plannerEnabled: true, workspaceTaskId: 'draft', inputProjection: 'equirectangular', inputSourceIdentity: 'identity', imageMatchingStrategy });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'create_gui_task', { path: 'E:/photos', quality: 'balanced', projectsRoot: 'E:/projects', plannerEnabled: true, workspaceTaskId: 'draft', inputProjection: 'equirectangular', inputSourceIdentity: 'identity', imageMatchingStrategy, subjectMask: null });
     expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'start_gui_task', { taskId: 'task' });
     expect(mocks.invoke).toHaveBeenCalledTimes(3);
   });

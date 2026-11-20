@@ -24,6 +24,7 @@ pub mod runtime;
 pub mod splat_budget;
 pub(crate) mod sqlite_recovery;
 pub mod state;
+pub mod subject_mask;
 pub mod work_order;
 
 pub use event::{EventKind, EventLevel, PipelineEngine, PipelineEvent};

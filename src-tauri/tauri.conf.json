@@ -59,7 +59,8 @@
       "../LICENSE": "LICENSE",
       "../NOTICE": "NOTICE",
       "../TRADEMARK_POLICY.md": "TRADEMARK_POLICY.md",
-      "../GENERATED_OUTPUTS.md": "GENERATED_OUTPUTS.md"
+      "../GENERATED_OUTPUTS.md": "GENERATED_OUTPUTS.md",
+      "../scripts/subject_mask/sam2_video.py": "scripts/subject_mask/sam2_video.py"
     },
     "windows": {
       "nsis": {
