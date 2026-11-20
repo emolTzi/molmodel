@@ -4023,15 +4023,38 @@ async fn cancelling_flushes_activity_beyond_the_five_hundred_event_memory_window
         .tasks
         .get_mut(&task.task_id)
         .unwrap()
-        .project_path = Some(project);
-    for sequence in 1..=620 {
+        .project_path = Some(project.clone());
+    for sequence in 1..=30 {
         service.on_event(
             task.task_id,
             run,
             notification_event(sequence, crate::pipeline::EventKind::Log),
         );
-        if sequence % 50 == 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    let started = std::time::Instant::now();
+    loop {
+        let ready = std::fs::read_dir(project.join("logs"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry.path().extension().and_then(|ext| ext.to_str()) == Some("log")
+                    && entry.metadata().is_ok_and(|metadata| metadata.len() > 0)
+            });
+        if ready || started.elapsed() >= std::time::Duration::from_secs(2) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    for sequence in 31..=620 {
+        service.on_event(
+            task.task_id,
+            run,
+            notification_event(sequence, crate::pipeline::EventKind::Log),
+        );
+        if sequence % 16 == 0 {
+            tokio::task::yield_now().await;
         }
     }
     let runner = Arc::new(PipelineRunner::new(default_engine_paths(None), |_| {}));
