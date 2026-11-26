@@ -59,6 +59,7 @@ import { useGaussianTransformStore } from "../stores/gaussianTransformStore";
 import type { EngineStatus, GpuInventory, GpuSelection, InputType, PipelineEvent, PipelineResult, ProjectStatus, ProjectSummary, ProjectTaskDetail, Quality } from "../types/pipeline";
 import type { TelemetryPreferences as TelemetryPreferencesState } from "../types/telemetry";
 import { createGenerationDraft, createReshootDraft, draftDisplayName, draftGenerationPolicy, loadTaskWorkspace, nextGenerationOrdinal, saveTaskWorkspace, type TaskDraft, type TaskSelection } from "./taskWorkspace";
+import { SubjectMaskPanel } from "../components/SubjectMaskPanel";
 import { displayStatusForDraft, draftIsRunnable, draftProjectionReady, firstQueueInputIssue, queuedDraftIds, reorderDrafts, type DraftDisplayStatus } from "./taskQueue";
 import { loadUiPreferences, saveUiPreferences } from "./uiPreferences";
 import { GenerationPreflightDialog, type PreflightSession } from '../components/GenerationPreflightDialog';
@@ -1690,6 +1691,10 @@ export function App() {
   const generate = async (draftId = selectedDraft?.id, source: "manual" | "queue" = "manual") => {
     const draft = taskWorkspaceRef.current.drafts.find((item) => item.id === draftId);
     if (!draft || (draft.kind !== "generation"&&!draft.inputs) || !draft.inputPath || !draft.plan || !store.projectsRoot) return;
+    if (draft.subjectMask?.enabled && !draft.subjectMask.accepted) {
+      updateDraft(draft.id, { error: t("subjectMask.blocked") });
+      return;
+    }
     if (draft.inputChecking || draft.needsValidation || !draftProjectionReady(draft) || (draft.kind==='reshoot'&&!draft.reshootSource?.eligible)) return;
     if (preflightRef.current || queueCheckingRef.current) return;
     if (!claimRunGate()) return;
@@ -1744,7 +1749,8 @@ export function App() {
     let nextIndex = 0;
     try {
       const options=draft.kind==='reshoot'?{condition:preflightAnswers[`${draft.id}:reshootCondition`] as import('../types/pipeline').ReshootCondition,allowFallback:draft.autoRetryEnabled,sourceIdentity:draft.reshootSource!.sourceIdentity!,inputIdentity:JSON.stringify(Object.values(draft.inputAnalyses??{}).map(a=>a.identity)),projection:'perspective' as const,imageMatchingStrategy:'exhaustive' as const}:undefined;
-      const result = draft.inputs?await startInputsPipeline(confirmedInputs(draft,preflightAnswers),draft.quality,store.projectsRoot,draft.id,draftGenerationPolicy(draft),draft.sourceProjectId,options,gpuSelection):await startPipeline(draft.inputPath, draft.quality, store.projectsRoot, true, draft.id, resolvedProjection(taskWorkspaceRef.current.drafts.find(item => item.id === draft.id) ?? draft), draft.projectionDetection?.sourceIdentity, imageMatchingStrategy(draft, preflightAnswers), draftGenerationPolicy(draft),gpuSelection);
+      const subjectMask = draft.subjectMask?.enabled && draft.subjectMask.accepted && draft.subjectMask.sessionId ? { sessionId: draft.subjectMask.sessionId } : null;
+      const result = draft.inputs?await startInputsPipeline(confirmedInputs(draft,preflightAnswers),draft.quality,store.projectsRoot,draft.id,draftGenerationPolicy(draft),draft.sourceProjectId,options,gpuSelection,subjectMask):await startPipeline(draft.inputPath, draft.quality, store.projectsRoot, true, draft.id, resolvedProjection(taskWorkspaceRef.current.drafts.find(item => item.id === draft.id) ?? draft), draft.projectionDetection?.sourceIdentity, imageMatchingStrategy(draft, preflightAnswers), draftGenerationPolicy(draft),gpuSelection,subjectMask);
       setLiveElapsedMs((current) => Math.max(current, result.durationMs));
       store.setResult(result);
       store.setPhase("completed");
@@ -2386,6 +2392,8 @@ export function App() {
           </div>
         </div>
 
+        <SubjectMaskPanel draft={selectedDraft} projectsRoot={store.projectsRoot} disabled={selectedDraft.running} onChange={(patch) => updateDraft(selectedDraft.id, patch)} />
+
         <div className={`acceleration-status ${systemDetectionTemporary ? "warning" : systemAcceleration?.backend === "gpu" ? "gpu" : systemAccelerationWarning ? "warning" : "cpu"}`} aria-live="polite">
           <span className="acceleration-icon">{systemAcceleration == null ? <LoaderCircle className="spin" size={17} /> : systemDetectionTemporary || systemAccelerationWarning ? <CircleAlert size={17} /> : systemAcceleration.backend === "gpu" ? <Zap size={17} fill="currentColor" /> : <Cpu size={17} />}</span>
           <span>
@@ -2395,7 +2403,7 @@ export function App() {
           </span>
         </div>
 
-        <button className="primary-action" type="button" disabled={runBusy || queueChecking || !!preflight || selectedDraft.inputChecking || selectedDraft.needsValidation || !draftProjectionReady(selectedDraft) || !selectedDraft.inputPath || !selectedDraft.plan || !store.projectsRoot || missingEngines.length > 0} onClick={() => void generate()}><Play size={16} fill="currentColor" />{t("generate.start")}</button>
+        <button className="primary-action" type="button" disabled={runBusy || queueChecking || !!preflight || selectedDraft.inputChecking || selectedDraft.needsValidation || !draftProjectionReady(selectedDraft) || !selectedDraft.inputPath || !selectedDraft.plan || !store.projectsRoot || missingEngines.length > 0 || Boolean(selectedDraft.subjectMask?.enabled && !selectedDraft.subjectMask.accepted)} onClick={() => void generate()}><Play size={16} fill="currentColor" />{t("generate.start")}</button>
         {detailErrorBanner}
         </>}
 

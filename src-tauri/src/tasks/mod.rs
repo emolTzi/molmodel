@@ -2011,6 +2011,25 @@ impl TaskService {
             .cloned()
             .map(serde_json::from_value::<crate::pipeline::generation_policy::GenerationPolicy>)
             .transpose()?);
+        let subject_mask = match task
+            .request_parameters
+            .as_ref()
+            .and_then(|value| value.get("subjectMask"))
+        {
+            None | Some(serde_json::Value::Null) => None,
+            Some(value) => {
+                let session_id = value
+                    .get("sessionId")
+                    .and_then(|item| item.as_str())
+                    .ok_or_else(|| ServiceError::new("INVALID_ARGUMENT", "单物体掩码会话无效"))?;
+                let session_id = uuid::Uuid::parse_str(session_id)
+                    .map_err(|_| ServiceError::new("INVALID_ARGUMENT", "单物体掩码会话无效"))?;
+                Some(
+                    crate::pipeline::subject_mask::load_segmented(&task.projects_root, session_id)
+                        .map_err(|error| ServiceError::new("SUBJECT_MASK", error.to_string()))?,
+                )
+            }
+        };
         let runner = Arc::new(
             PipelineRunner::new_with_planner(engines, task.planner_enabled, move |event| {
                 if let Some(s) = &observe {
@@ -2034,6 +2053,7 @@ impl TaskService {
             } else {
                 None
             })
+            .with_subject_mask(subject_mask)
             .with_video_projection(
                 task.request_parameters
                     .as_ref()

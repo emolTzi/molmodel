@@ -35,8 +35,8 @@ export const classifyGenerationPaths=(paths:string[]):Promise<import('../types/i
 export const detectMaterialGps=(item:import('../types/inputs').MaterialInput,identity:string):Promise<boolean>=>invoke('detect_material_gps',{item,identity});
 export const inspectMaterialInputs=(inputs:import('../types/inputs').GenerationInputs,quality:Quality,generationPolicy:import('../types/pipeline').GenerationPolicy):Promise<import('../types/inputs').InputsInspection>=>invoke('inspect_material_inputs',{inputs,quality,generationPolicy});
 export const estimateMaterialInputs=(inputs:import('../types/inputs').GenerationInputs,quality:Quality,generationPolicy:import('../types/pipeline').GenerationPolicy):Promise<RuntimeEstimate|null>=>invoke('estimate_material_inputs',{inputs,quality,generationPolicy});
-export async function startInputsPipeline(inputs:import('../types/inputs').GenerationInputs,quality:Quality,projectsRoot:string,workspaceTaskId:string,generationPolicy:import('../types/pipeline').GenerationPolicy,sourceProjectId?:string|null,reshootOptions?:import('../types/pipeline').ReshootOptions,gpuSelection?:GpuSelection|null):Promise<PipelineResult>{
-  const receipt=await invoke<StartReceipt>('start_gui_inputs',{inputs,quality,projectsRoot,workspaceTaskId,generationPolicy,sourceProjectId:sourceProjectId??null,reshootOptions:reshootOptions??null,...(gpuSelection?{gpuSelection}:{})});
+export async function startInputsPipeline(inputs:import('../types/inputs').GenerationInputs,quality:Quality,projectsRoot:string,workspaceTaskId:string,generationPolicy:import('../types/pipeline').GenerationPolicy,sourceProjectId?:string|null,reshootOptions?:import('../types/pipeline').ReshootOptions,gpuSelection?:GpuSelection|null,subjectMask?:{sessionId:string}|null):Promise<PipelineResult>{
+  const receipt=await invoke<StartReceipt>('start_gui_inputs',{inputs,quality,projectsRoot,workspaceTaskId,generationPolicy,sourceProjectId:sourceProjectId??null,reshootOptions:reshootOptions??null,...(gpuSelection?{gpuSelection}:{}),subjectMask:subjectMask??null});
   return waitForSharedTask(receipt);
 }
 
@@ -150,8 +150,8 @@ export async function onInputDragDrop(handler: (event: NativeInputDragEvent) => 
     });
   });
 }
-export async function startPipeline(path: string, quality: Quality, projectsRoot: string, plannerEnabled = true, workspaceTaskId?: string, videoProjection?: import("../types/pipeline").VideoProjection, videoSourceIdentity?: string, imageMatchingStrategy?: import("../types/pipeline").ImageMatchingStrategy, generationPolicy?: import('../types/pipeline').GenerationPolicy, gpuSelection?:GpuSelection|null): Promise<PipelineResult> {
-  const task = await invoke<SharedTask>("create_gui_task", { path, quality, projectsRoot, plannerEnabled, workspaceTaskId, inputProjection: videoProjection, inputSourceIdentity: videoSourceIdentity, imageMatchingStrategy, ...(generationPolicy ? { generationPolicy } : {}), ...(gpuSelection?{gpuSelection}:{}) });
+export async function startPipeline(path: string, quality: Quality, projectsRoot: string, plannerEnabled = true, workspaceTaskId?: string, videoProjection?: import("../types/pipeline").VideoProjection, videoSourceIdentity?: string, imageMatchingStrategy?: import("../types/pipeline").ImageMatchingStrategy, generationPolicy?: import('../types/pipeline').GenerationPolicy, gpuSelection?:GpuSelection|null, subjectMask?:{sessionId:string}|null): Promise<PipelineResult> {
+  const task = await invoke<SharedTask>("create_gui_task", { path, quality, projectsRoot, plannerEnabled, workspaceTaskId, inputProjection: videoProjection, inputSourceIdentity: videoSourceIdentity, imageMatchingStrategy, ...(generationPolicy ? { generationPolicy } : {}), ...(gpuSelection?{gpuSelection}:{}), subjectMask: subjectMask ?? null });
   const receipt = await startGuiTask(task.task_id, undefined, gpuSelection);
   return waitForSharedTask(receipt);
 }
@@ -166,6 +166,13 @@ export async function startReshootPipeline(request: { sourceProjectId: string; r
   return waitForSharedTask(receipt);
 }
 export async function cancelPipeline(): Promise<void> { return invoke("cancel_pipeline"); }
+const defaultSubjectMaskSettings = { python: "python", checkpoint: "", modelCfg: "configs/sam2.1/sam2.1_hiera_t.yaml", birefnetCheckpoint: "" };
+export async function getSubjectMaskSettings(): Promise<{ python: string; checkpoint: string; modelCfg: string; birefnetCheckpoint: string }> { return inTauri() ? invoke("get_subject_mask_settings") : defaultSubjectMaskSettings; }
+export async function saveSubjectMaskSettings(settings: { python: string; checkpoint: string; modelCfg: string; birefnetCheckpoint: string }): Promise<{ python: string; checkpoint: string; modelCfg: string; birefnetCheckpoint: string }> { return inTauri() ? invoke("set_subject_mask_settings", { settings }) : settings; }
+export async function subjectMaskPreflight(): Promise<{ ok: boolean; message?: string }> { return inTauri() ? invoke("subject_mask_preflight") : { ok: false, message: "SAM 2 is unavailable in this preview." }; }
+export async function prepareSubjectMask(request: { videoPath: string; projectsRoot: string; quality: Quality; generationPolicy: import("../types/pipeline").GenerationPolicy; projection: import("../types/pipeline").VideoProjection }): Promise<{ sessionId: string; frameCount: number; width: number; height: number; previewPngBase64: string }> { return invoke("prepare_subject_mask", { request }); }
+export async function segmentSubjectMask(request: { projectsRoot: string; sessionId: string; frameIndex: number; points: Array<[number, number]>; labels: number[]; boxXyxy: number[] | null; automatic?: boolean }): Promise<{ sessionId: string; promptCoverage: number; dtype: string; previews: Array<{ index: number; framePngBase64: string; maskPngBase64: string }>; trainingNote: string }> { return invoke("segment_subject_mask", { request }); }
+export async function cancelSubjectMask(): Promise<void> { return invoke("cancel_subject_mask"); }
 export async function prepareErrorReport(failureId: string): Promise<ErrorReportDraft> { return invoke("prepare_error_report", { failureId }); }
 export async function sendErrorReport(draftId: string): Promise<ErrorReportReceipt> { return invoke("send_error_report", { draftId }); }
 export async function onPipelineEvent(handler: (event: PipelineEvent) => void): Promise<UnlistenFn> { return inTauri() ? listen<PipelineEvent>("pipeline-event", ({ payload }) => handler(payload)) : () => undefined; }

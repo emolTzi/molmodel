@@ -497,6 +497,9 @@ pub struct PipelineStateFile {
     pub database_recovery_pending: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actual_transparency: Option<bool>,
+    /// Missing on older projects: they keep the full-scene recipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_mask: Option<crate::pipeline::subject_mask::SubjectMaskCheckpoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gps: Option<crate::reconstruction::gps::Checkpoint>,
     /// Frozen at creation. Legacy image projects retain exhaustive matching.
@@ -609,6 +612,7 @@ impl PipelineStateFile {
             retry_cache_pending: vec![],
             database_recovery_pending: None,
             actual_transparency: None,
+            subject_mask: None,
             gps: None,
             creation: None,
             temporary_png_focal: None,

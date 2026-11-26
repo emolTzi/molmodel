@@ -668,6 +668,7 @@ pub struct PipelineRunner {
     camera_grouping_policy_version: std::sync::RwLock<Option<u32>>,
     ordinary_image_preparation_version: std::sync::RwLock<Option<u32>>,
     generation_policy: std::sync::RwLock<Option<super::generation_policy::GenerationPolicy>>,
+    subject_mask: Option<super::subject_mask::SubjectMaskCheckpoint>,
     reshoot_options: Option<crate::pipeline::reshoot::ReshootOptions>,
     image_matching_strategy: crate::project::ImageMatchingStrategy,
     video_projection: crate::video::panorama::VideoProjection,
@@ -745,6 +746,14 @@ impl PipelineRunner {
         self.inputs = inputs;
         self
     }
+
+    pub fn with_subject_mask(
+        mut self,
+        subject_mask: Option<super::subject_mask::SubjectMaskCheckpoint>,
+    ) -> Self {
+        self.subject_mask = subject_mask;
+        self
+    }
     pub fn new(engines: EnginePaths, emit: impl Fn(PipelineEvent) + Send + Sync + 'static) -> Self {
         Self::new_with_planner(engines, true, emit).with_generation_policy(Some(Default::default()))
     }
@@ -768,6 +777,7 @@ impl PipelineRunner {
                 super::inputs::ORDINARY_IMAGE_PREPARATION_VERSION,
             )),
             generation_policy: std::sync::RwLock::new(None),
+            subject_mask: None,
             video_projection: crate::video::panorama::VideoProjection::Auto,
             image_matching_strategy: crate::project::ImageMatchingStrategy::default(),
             engines,
@@ -2182,6 +2192,9 @@ impl PipelineRunner {
         }
         state.configuration = Some((*crate::presets::pipeline_optimization_config()).clone());
         state.generation_policy = self.policy();
+        if self.subject_mask.is_some() {
+            state.subject_mask = self.subject_mask.clone();
+        }
         state.planner_enabled = self.planner_enabled;
         state.resolution_policy_version = self
             .planner_enabled
@@ -5183,13 +5196,35 @@ impl PipelineRunner {
             .and_then(|r| r.recipe.as_ref())
             .filter(|r| r.actual.training == crate::pipeline::reshoot::TrainingMode::Warm)
             .and_then(|r| r.warm_parameters);
-        let alpha_mode = state.brush_training.alpha_mode(
+        let mut alpha_mode = state.brush_training.alpha_mode(
             state
                 .reshoot
                 .as_ref()
                 .and_then(|r| r.recipe.as_ref())
                 .is_some(),
         )?;
+        if state.subject_mask.is_some() {
+            let executable = self.engines.brush.clone();
+            let help = crate::presets::spawn_pipeline_blocking(move || {
+                crate::pipeline::subject_mask::read_brush_help(&executable)
+            })
+            .await
+            .map_err(|error| SplatError::Process(error.to_string()))??;
+            if !crate::pipeline::subject_mask::brush_help_supports_masked_loss(&help) {
+                return Err(SplatError::Process(
+                    crate::pipeline::subject_mask::TRAINING_BLOCKED.into(),
+                ));
+            }
+            alpha_mode = Some("masked");
+            state.brush_training.execution_options =
+                Some(crate::project::metadata::BrushExecutionOptions {
+                    version: 1,
+                    alpha: crate::project::metadata::AlphaInterpretation::Masked,
+                });
+            project_manager
+                .write_state_for_training(&paths.state, state)
+                .await?;
+        }
         let gpu_launch_policy = brush::BrushGpuLaunchPolicy::from_hardware_plan(
             acceleration,
             self.resolved_hardware().as_ref(),

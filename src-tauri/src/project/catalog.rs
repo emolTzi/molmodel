@@ -170,6 +170,30 @@ pub struct AppSettings {
     pub planner_enabled: bool,
     #[serde(default)]
     pub hardware: HardwareSettings,
+    #[serde(default)]
+    pub subject_mask: SubjectMaskSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectMaskSettings {
+    pub python: String,
+    pub checkpoint: String,
+    pub model_cfg: String,
+    /// Local ZhengPeng7/BiRefNet snapshot. Empty leaves automatic first-pass off.
+    #[serde(default)]
+    pub birefnet_checkpoint: String,
+}
+
+impl Default for SubjectMaskSettings {
+    fn default() -> Self {
+        Self {
+            python: "python".into(),
+            checkpoint: String::new(),
+            model_cfg: "configs/sam2.1/sam2.1_hiera_t.yaml".into(),
+            birefnet_checkpoint: String::new(),
+        }
+    }
 }
 
 const fn default_planner_enabled() -> bool {
@@ -356,6 +380,7 @@ pub async fn load_settings() -> Result<AppSettings> {
         projects_root: default_projects_root()?,
         planner_enabled: true,
         hardware: HardwareSettings::default(),
+        subject_mask: SubjectMaskSettings::default(),
     })
 }
 
@@ -373,6 +398,34 @@ pub async fn save_projects_root(root: PathBuf) -> Result<AppSettings> {
     let _guard = SETTINGS_LOCK.lock().await;
     let mut settings = load_settings().await?;
     settings.projects_root = root;
+    save_settings_unlocked(&settings).await?;
+    Ok(settings)
+}
+
+pub async fn save_subject_mask_settings(subject_mask: SubjectMaskSettings) -> Result<AppSettings> {
+    if subject_mask.python.is_empty()
+        || subject_mask.python.len() > 300
+        || subject_mask.model_cfg.is_empty()
+        || subject_mask.model_cfg.len() > 200
+        || subject_mask
+            .python
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '&' | '|' | ';' | '`' | '\n'))
+        || subject_mask.model_cfg.chars().any(|c| c.is_control())
+        || subject_mask.checkpoint.chars().any(|c| c.is_control())
+        || subject_mask.birefnet_checkpoint.len() > 1024
+        || subject_mask
+            .birefnet_checkpoint
+            .chars()
+            .any(|c| c.is_control())
+    {
+        return Err(SplatError::Process(
+            "单物体分割的 Python 或权重路径无效。".into(),
+        ));
+    }
+    let _guard = SETTINGS_LOCK.lock().await;
+    let mut settings = load_settings().await?;
+    settings.subject_mask = subject_mask;
     save_settings_unlocked(&settings).await?;
     Ok(settings)
 }
@@ -904,6 +957,7 @@ mod tests {
             planner_enabled: true,
             hardware: HardwareSettings::default(),
             projects_root: PathBuf::from("C:/项目 Root"),
+            subject_mask: SubjectMaskSettings::default(),
         };
         assert!(serde_json::to_string(&value)
             .unwrap()
@@ -911,6 +965,18 @@ mod tests {
         assert!(!serde_json::to_string(&value)
             .unwrap()
             .contains("colmapAcceleration"));
+    }
+
+    #[test]
+    fn old_settings_without_birefnet_leave_the_first_pass_unconfigured() {
+        let with_sam = r#"{"schemaVersion":1,"projectsRoot":"C:/旧目录","subjectMask":{"python":"python","checkpoint":"sam.pt","modelCfg":"configs/sam2.1/sam2.1_hiera_t.yaml"}}"#;
+        let parsed: AppSettings = serde_json::from_str(with_sam).unwrap();
+        assert!(parsed.subject_mask.birefnet_checkpoint.is_empty());
+        assert_eq!(parsed.subject_mask.checkpoint, "sam.pt");
+        let without_feature = r#"{"schemaVersion":1,"projectsRoot":"C:/旧目录"}"#;
+        let parsed: AppSettings = serde_json::from_str(without_feature).unwrap();
+        assert!(parsed.subject_mask.birefnet_checkpoint.is_empty());
+        assert!(parsed.subject_mask.checkpoint.is_empty());
     }
 
     #[test]
