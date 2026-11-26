@@ -10,7 +10,7 @@ import {
   segmentSubjectMask,
   subjectMaskPreflight,
 } from "../lib/backend";
-import { subjectMaskGate, type SubjectMaskDraft } from "../lib/subjectMask";
+import { segmentSubjectRequest, subjectMaskGate, type SubjectMaskDraft } from "../lib/subjectMask";
 
 type Tool = "positive" | "negative" | "box";
 
@@ -52,6 +52,7 @@ export function SubjectMaskPanel({
   const [python, setPython] = useState("python");
   const [checkpoint, setCheckpoint] = useState("");
   const [modelCfg, setModelCfg] = useState("configs/sam2.1/sam2.1_hiera_t.yaml");
+  const [birefnet, setBirefnet] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tool, setTool] = useState<Tool>("positive");
@@ -68,6 +69,7 @@ export function SubjectMaskPanel({
       setPython(settings.python);
       setCheckpoint(settings.checkpoint);
       setModelCfg(settings.modelCfg);
+      setBirefnet(settings.birefnetCheckpoint ?? "");
     }).catch(() => undefined);
   }, []);
 
@@ -92,6 +94,31 @@ export function SubjectMaskPanel({
     setPoints((current) => [...current, { x, y, label }].slice(-32));
   };
 
+  const runSegment = async (mode: "auto" | "manual") => {
+    if (!selection?.sessionId || !projectsRoot) return;
+    setBusy(true);
+    try {
+      const request = segmentSubjectRequest(
+        mode,
+        points.map((point) => [point.x, point.y]),
+        points.map((point) => point.label),
+        box && boxEnd ? [box.x, box.y, boxEnd.x, boxEnd.y] : null,
+      );
+      const result = await segmentSubjectMask({
+        projectsRoot,
+        sessionId: selection.sessionId,
+        frameIndex: 0,
+        ...request,
+      });
+      setMasks(result.previews.map((item) => ({ index: item.index, frame: item.framePngBase64, mask: item.maskPngBase64 })));
+      setMessage(result.trainingNote);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="form-section subject-mask">
       <div className="field-label-row">
@@ -114,8 +141,10 @@ export function SubjectMaskPanel({
           <label>{t("subjectMask.python")}<input value={python} onChange={(event) => setPython(event.target.value)} /></label>
           <label>{t("subjectMask.checkpoint")}<input value={checkpoint} onChange={(event) => setCheckpoint(event.target.value)} /></label>
           <label>{t("subjectMask.modelCfg")}<input value={modelCfg} onChange={(event) => setModelCfg(event.target.value)} /></label>
+          <label>{t("subjectMask.birefnet")}<input value={birefnet} onChange={(event) => setBirefnet(event.target.value)} /></label>
+          <p className="field-note">{t("subjectMask.autoNote")}</p>
           <div className="subject-mask-actions">
-            <button type="button" disabled={busy} onClick={() => void saveSubjectMaskSettings({ python, checkpoint, modelCfg }).then(() => setMessage(t("common.saved"))).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))}>{t("subjectMask.save")}</button>
+            <button type="button" disabled={busy} onClick={() => void saveSubjectMaskSettings({ python, checkpoint, modelCfg, birefnetCheckpoint: birefnet }).then(() => setMessage(t("common.saved"))).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))}>{t("subjectMask.save")}</button>
             <button type="button" disabled={busy} onClick={() => void subjectMaskPreflight().then((result) => setMessage(String(result.message ?? ""))).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))}>{t("subjectMask.preflight")}</button>
             <button type="button" disabled={busy || !projectsRoot || !draft.inputPath} onClick={() => void (async () => {
               setBusy(true);
@@ -156,25 +185,8 @@ export function SubjectMaskPanel({
               </div>
               <p className="field-note">{width}×{height}</p>
               <div className="subject-mask-actions">
-                <button type="button" disabled={busy || !selection.sessionId || (!points.some((point) => point.label === 1) && !(box && boxEnd))} onClick={() => void (async () => {
-                  setBusy(true);
-                  try {
-                    const result = await segmentSubjectMask({
-                      projectsRoot: projectsRoot!,
-                      sessionId: selection.sessionId!,
-                      frameIndex: 0,
-                      points: points.map((point) => [point.x, point.y]),
-                      labels: points.map((point) => point.label),
-                      boxXyxy: box && boxEnd ? [box.x, box.y, boxEnd.x, boxEnd.y] : null,
-                    });
-                    setMasks(result.previews.map((item) => ({ index: item.index, frame: item.framePngBase64, mask: item.maskPngBase64 })));
-                    setMessage(result.trainingNote);
-                  } catch (error) {
-                    setMessage(error instanceof Error ? error.message : String(error));
-                  } finally {
-                    setBusy(false);
-                  }
-                })()}>{t("subjectMask.segment")}</button>
+                <button type="button" disabled={busy || !selection.sessionId} onClick={() => void runSegment("auto")}>{t("subjectMask.auto")}</button>
+                <button type="button" disabled={busy || !selection.sessionId || (!points.some((point) => point.label === 1) && !(box && boxEnd))} onClick={() => void runSegment("manual")}>{t("subjectMask.segment")}</button>
                 <button type="button" disabled={busy} onClick={() => void cancelSubjectMask()}>{t("subjectMask.cancel")}</button>
                 <button type="button" disabled={!masks.length || !selection.sessionId} onClick={() => setSelection({ enabled: true, sessionId: selection.sessionId, accepted: true })}>{t("subjectMask.accept")}</button>
                 <button type="button" onClick={() => { setPoints([]); setBox(null); setBoxEnd(null); setMasks([]); setSelection({ enabled: true, sessionId: selection.sessionId, accepted: false }); }}>{t("subjectMask.rerun")}</button>

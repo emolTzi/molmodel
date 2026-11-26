@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     io::Cursor,
     path::{Path, PathBuf},
     sync::Arc,
@@ -15,7 +16,10 @@ use crate::{
     error::{Result, SplatError},
     pipeline::{
         generation_policy::GenerationPolicy,
-        subject_mask::{self, SubjectMaskCheckpoint, SubjectMaskStatus, SubjectPrompt, MAX_FRAMES},
+        subject_mask::{
+            self, SubjectInitializer, SubjectMaskCheckpoint, SubjectMaskStatus, SubjectPrompt,
+            MAX_FRAMES,
+        },
     },
     presets::Quality,
     process::{ProcessManager, ProcessSpec},
@@ -70,6 +74,8 @@ pub struct SegmentSubjectMaskRequest {
     pub points: Vec<(f64, f64)>,
     pub labels: Vec<u8>,
     pub box_xyxy: Option<[f64; 4]>,
+    #[serde(default)]
+    pub automatic: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -222,71 +228,133 @@ pub async fn segment_subject_mask(
     request: SegmentSubjectMaskRequest,
 ) -> Result<SegmentSubjectMaskResponse> {
     ensure_idle(&pipeline).await?;
-    if request.points.len() != request.labels.len()
-        || request.points.len() > subject_mask::MAX_PROMPTS
-        || (request.points.is_empty() && request.box_xyxy.is_none())
-        || request.labels.iter().any(|label| *label > 1)
-    {
+    let settings = catalog::load_settings().await?.subject_mask;
+    let initializer = subject_mask::plan_segment(
+        request.automatic,
+        request.frame_index,
+        &request.points,
+        &request.labels,
+        request.box_xyxy,
+        &settings.birefnet_checkpoint,
+    )?;
+    if settings.checkpoint.is_empty() {
         return Err(SplatError::Process(
-            "主体提示无效。需要前景点或主体框。".into(),
+            "还没有填写 SAM 2.1 权重路径，分割已停止。".into(),
         ));
     }
     let projects_root = PathBuf::from(&request.projects_root);
     crate::project::ProjectManager::validate_root(&projects_root).await?;
     let session = subject_mask::session_directory(&projects_root, request.session_id)?;
     let frames = jpeg_frames(&session.join("frames"))?;
-    let frame_index = request.frame_index as usize;
+    let frame_index = if initializer == SubjectInitializer::BiRefNet {
+        0
+    } else {
+        request.frame_index as usize
+    };
     let frame = frames
         .get(frame_index)
         .ok_or_else(|| SplatError::Process("提示帧不存在。".into()))?;
     let (width, height) =
         image::image_dimensions(frame).map_err(|error| SplatError::Process(error.to_string()))?;
     let mut points = Vec::new();
-    for (x, y) in &request.points {
-        points.push(subject_mask::normalized_to_pixel(*x, *y, width, height)?);
-    }
-    let box_xyxy = request
-        .box_xyxy
-        .map(|[x0, y0, x1, y1]| -> Result<[f64; 4]> {
-            let (ax, ay) = subject_mask::normalized_to_pixel(x0, y0, width, height)?;
-            let (bx, by) = subject_mask::normalized_to_pixel(x1, y1, width, height)?;
-            Ok([ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)])
-        })
-        .transpose()?;
-    let settings = catalog::load_settings().await?.subject_mask;
-    if settings.checkpoint.is_empty() {
-        return Err(SplatError::Process(
-            "还没有填写 SAM 2.1 权重路径，分割已停止。".into(),
-        ));
-    }
+    let box_xyxy = if initializer == SubjectInitializer::SamPrompt {
+        for (x, y) in &request.points {
+            points.push(subject_mask::normalized_to_pixel(*x, *y, width, height)?);
+        }
+        request
+            .box_xyxy
+            .map(|[x0, y0, x1, y1]| -> Result<[f64; 4]> {
+                let (ax, ay) = subject_mask::normalized_to_pixel(x0, y0, width, height)?;
+                let (bx, by) = subject_mask::normalized_to_pixel(x1, y1, width, height)?;
+                Ok([ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)])
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let masks_dir = session.join("masks");
-    let indexed = session.join("sam2-frames");
     if masks_dir.exists() {
         tokio::fs::remove_dir_all(&masks_dir).await?;
     }
+    let init_mask = if initializer == SubjectInitializer::BiRefNet {
+        let resolved =
+            subject_mask::resolve_birefnet_snapshot(Path::new(&settings.birefnet_checkpoint))?;
+        let output_mask = session.join("birefnet-init.png");
+        let init_job_path = session.join("birefnet-job.json");
+        let init_job = subject_mask::birefnet_job(
+            &session,
+            frame,
+            &output_mask,
+            &settings.birefnet_checkpoint,
+        );
+        crate::project::manager::atomic_write_json(&init_job_path, &init_job).await?;
+        let init_script = adapter_script(&app, "birefnet_init.py")?;
+        let init_output = run_subject_process(
+            &runtime,
+            PathBuf::from(&settings.python),
+            subject_mask::birefnet_arguments(&init_script, &init_job_path),
+            &session,
+            "birefnet.log",
+        )
+        .await?;
+        if !init_output.success {
+            let _ = tokio::fs::remove_file(&output_mask).await;
+            return Err(SplatError::Process(failure_message(
+                &init_output.stdout,
+                "BiRefNet 首帧分割失败。没有把背景涂黑，也没有开始跟踪或训练。",
+            )));
+        }
+        let init_result =
+            parse_result_json(&init_output.stdout, "BiRefNet 没有返回可解析的结果。")?;
+        if init_result.get("ok") != Some(&serde_json::Value::Bool(true)) {
+            let _ = tokio::fs::remove_file(&output_mask).await;
+            return Err(SplatError::Process(
+                "BiRefNet 未报告成功，首帧结果已丢弃。".into(),
+            ));
+        }
+        let mask = image::open(&output_mask)
+            .map_err(|error| SplatError::Process(error.to_string()))?
+            .into_luma8();
+        if mask.width() != width || mask.height() != height {
+            let _ = tokio::fs::remove_file(&output_mask).await;
+            return Err(SplatError::Process(
+                "BiRefNet 首帧掩码与抽帧尺寸不一致。".into(),
+            ));
+        }
+        if let Err(error) = subject_mask::accept_automatic_coverage(subject_mask::coverage(&mask)) {
+            let _ = tokio::fs::remove_file(&output_mask).await;
+            return Err(error);
+        }
+        Some((output_mask, resolved.sha256))
+    } else {
+        None
+    };
+    let indexed = session.join("sam2-frames");
     tokio::fs::create_dir_all(&masks_dir).await?;
     tokio::fs::create_dir_all(&indexed).await?;
     let job_path = session.join("job.json");
-    let job = serde_json::json!({
-        "sessionDir": session,
-        "framesDir": session.join("frames"),
-        "masksDir": masks_dir,
-        "indexedDir": indexed,
-        "checkpoint": settings.checkpoint,
-        "modelCfg": settings.model_cfg,
-        "frameIndex": frame_index,
-        "points": points,
-        "labels": request.labels,
-        "box": box_xyxy,
+    let sam_labels: Vec<u8> = if initializer == SubjectInitializer::SamPrompt {
+        request.labels.clone()
+    } else {
+        Vec::new()
+    };
+    let job = subject_mask::sam2_job(subject_mask::Sam2Job {
+        session: &session,
+        checkpoint: &settings.checkpoint,
+        model_cfg: &settings.model_cfg,
+        frame_index,
+        points: &points,
+        labels: &sam_labels,
+        box_xyxy,
+        init_mask: init_mask.as_ref().map(|(path, _)| path.as_path()),
     });
     crate::project::manager::atomic_write_json(&job_path, &job).await?;
-    let script = adapter_script(&app)?;
-    let python = PathBuf::from(&settings.python);
+    let script = adapter_script(&app, "sam2_video.py")?;
     let manager = Arc::new(ProcessManager::new().with_complete_stdout_limit(2 * 1024 * 1024));
     *runtime.job.lock().await = Some(manager.clone());
     let output = manager
         .run(ProcessSpec {
-            executable: python,
+            executable: PathBuf::from(&settings.python),
             args: subject_mask::sam2_arguments(&script, &job_path),
             working_directory: Some(session.clone()),
             log_path: Some(session.join("sam2.log")),
@@ -297,33 +365,12 @@ pub async fn segment_subject_mask(
     let output = output?;
     if !output.success {
         let _ = tokio::fs::remove_dir_all(&masks_dir).await;
-        let message = serde_json::from_str::<serde_json::Value>(
-            output
-                .stdout
-                .lines()
-                .rev()
-                .find(|line| !line.is_empty())
-                .unwrap_or(""),
-        )
-        .ok()
-        .and_then(|value| {
-            value
-                .get("message")
-                .and_then(|item| item.as_str())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "SAM 2 分割失败。没有把背景涂黑，也没有开始训练。".into());
-        return Err(SplatError::Process(message));
+        return Err(SplatError::Process(failure_message(
+            &output.stdout,
+            "SAM 2 分割失败。没有把背景涂黑，也没有开始训练。",
+        )));
     }
-    let result: serde_json::Value = serde_json::from_str(
-        output
-            .stdout
-            .lines()
-            .rev()
-            .find(|line| line.starts_with('{'))
-            .unwrap_or("{}"),
-    )
-    .map_err(|_| SplatError::Process("SAM 2 没有返回可解析的结果。".into()))?;
+    let result = parse_result_json(&output.stdout, "SAM 2 没有返回可解析的结果。")?;
     if result.get("ok") != Some(&serde_json::Value::Bool(true)) {
         return Err(SplatError::Process(
             "SAM 2 未报告成功，分割结果已丢弃。".into(),
@@ -383,13 +430,28 @@ pub async fn segment_subject_mask(
         source_video_sha256: prepared_video_hash(&session)?,
         dtype,
         prompt: SubjectPrompt {
-            frame_index: request.frame_index,
-            points: request.points,
-            labels: request.labels,
-            box_xyxy: request.box_xyxy,
+            frame_index: u32::try_from(frame_index).unwrap_or(0),
+            points: if initializer == SubjectInitializer::BiRefNet {
+                Vec::new()
+            } else {
+                request.points
+            },
+            labels: if initializer == SubjectInitializer::BiRefNet {
+                Vec::new()
+            } else {
+                request.labels
+            },
+            box_xyxy: if initializer == SubjectInitializer::BiRefNet {
+                None
+            } else {
+                request.box_xyxy
+            },
+            initializer,
         },
         frames: records,
         prompt_coverage,
+        init_model_id: init_mask.as_ref().map(|_| "BiRefNet".to_owned()),
+        init_checkpoint_sha256: init_mask.as_ref().map(|(_, hash)| hash.clone()),
     };
     checkpoint.validate()?;
     crate::project::manager::atomic_write_json(&session.join("manifest.json"), &checkpoint).await?;
@@ -435,56 +497,141 @@ async fn ensure_idle(pipeline: &State<'_, super::PipelineController>) -> Result<
     Ok(())
 }
 
-fn adapter_script(app: &AppHandle) -> Result<PathBuf> {
+fn adapter_script(app: &AppHandle, file_name: &str) -> Result<PathBuf> {
+    let relative = Path::new("scripts/subject_mask").join(file_name);
     if let Ok(resources) = app.path().resource_dir() {
-        let bundled = resources.join("scripts/subject_mask/sam2_video.py");
+        let bundled = resources.join(&relative);
         if bundled.is_file() {
             return Ok(bundled);
         }
     }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/subject_mask/sam2_video.py");
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(&relative);
     if dev.is_file() {
         return Ok(dev);
     }
-    Err(SplatError::Process(
-        "找不到本机 SAM 2 适配脚本 scripts/subject_mask/sam2_video.py。".into(),
-    ))
+    Err(SplatError::Process(format!(
+        "找不到本机分割脚本 scripts/subject_mask/{file_name}。"
+    )))
+}
+
+async fn run_subject_process(
+    runtime: &SubjectMaskRuntime,
+    python: PathBuf,
+    args: Vec<OsString>,
+    session: &Path,
+    log_name: &str,
+) -> Result<crate::process::ProcessOutput> {
+    let manager = Arc::new(ProcessManager::new().with_complete_stdout_limit(2 * 1024 * 1024));
+    *runtime.job.lock().await = Some(manager.clone());
+    let output = manager
+        .run(ProcessSpec {
+            executable: python,
+            args,
+            working_directory: Some(session.to_path_buf()),
+            log_path: Some(session.join(log_name)),
+            observer: None,
+        })
+        .await;
+    *runtime.job.lock().await = None;
+    output
 }
 
 async fn run_preflight(
     app: &AppHandle,
     settings: &SubjectMaskSettings,
 ) -> Result<serde_json::Value> {
-    let script = adapter_script(app)?;
+    let mut value = run_json_script(
+        &settings.python,
+        preflight_arguments(&adapter_script(app, "sam2_video.py")?, &settings.checkpoint),
+        "分割预检没有返回结果。",
+    )
+    .await?;
+    let birefnet = run_json_script(
+        &settings.python,
+        preflight_arguments(
+            &adapter_script(app, "birefnet_init.py")?,
+            &settings.birefnet_checkpoint,
+        ),
+        "BiRefNet 预检没有返回结果。",
+    )
+    .await?;
+    let sam_message = value
+        .get("message")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let birefnet_message = birefnet
+        .get("message")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_owned();
+    value["birefnetOk"] = birefnet
+        .get("ok")
+        .cloned()
+        .unwrap_or(serde_json::Value::Bool(false));
+    value["birefnet"] = birefnet;
+    value["message"] = serde_json::Value::String(
+        format!("{sam_message} {birefnet_message}")
+            .trim()
+            .to_owned(),
+    );
+    Ok(value)
+}
+
+fn preflight_arguments(script: &Path, checkpoint: &str) -> Vec<OsString> {
     let mut args = vec![script.as_os_str().to_owned(), "--preflight".into()];
-    if !settings.checkpoint.is_empty() {
+    if !checkpoint.is_empty() {
         args.push("--checkpoint".into());
-        args.push(PathBuf::from(&settings.checkpoint).as_os_str().to_owned());
+        args.push(PathBuf::from(checkpoint).into());
     }
+    args
+}
+
+async fn run_json_script(
+    python: &str,
+    args: Vec<OsString>,
+    empty_message: &str,
+) -> Result<serde_json::Value> {
     let output = ProcessManager::new()
         .with_complete_stdout_limit(256 * 1024)
         .run(ProcessSpec {
-            executable: PathBuf::from(&settings.python),
+            executable: PathBuf::from(python),
             args,
             working_directory: None,
             log_path: None,
             observer: None,
         })
         .await?;
-    serde_json::from_str(
-        output
-            .stdout
-            .lines()
-            .rev()
-            .find(|line| line.starts_with('{'))
-            .unwrap_or("{}"),
-    )
-    .map_err(|_| {
+    parse_result_json(&output.stdout, empty_message).map_err(|_| {
         SplatError::Process(format!(
-            "分割预检没有返回结果。{}",
+            "{empty_message}{}",
             output.stderr.chars().take(400).collect::<String>()
         ))
     })
+}
+
+fn parse_result_json(stdout: &str, empty_message: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(last_json_line(stdout).unwrap_or("{}"))
+        .map_err(|_| SplatError::Process(empty_message.to_owned()))
+}
+
+fn failure_message(stdout: &str, fallback: &str) -> String {
+    last_json_line(stdout)
+        .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .and_then(|value| {
+            value
+                .get("message")
+                .and_then(|item| item.as_str())
+                .map(str::to_owned)
+        })
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn last_json_line(stdout: &str) -> Option<&str> {
+    stdout.lines().rev().find(|line| line.starts_with('{'))
 }
 
 fn jpeg_frames(directory: &Path) -> Result<Vec<PathBuf>> {

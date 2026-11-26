@@ -169,6 +169,28 @@ def segment(job_path: Path) -> None:
     for folder in (frames_dir, masks_dir, indexed):
         if not _inside(folder, session):
             fail("分割输出必须留在本次会话目录内。", "unsafe_path")
+    points = job.get("points") or []
+    labels = job.get("labels") or []
+    box = job.get("box")
+    init_mask = job.get("initMask")
+    init_path = None
+    if points and len(points) != len(labels):
+        fail("前景/背景点与标签数量不一致。", "bad_prompt")
+    if len(points) > 32:
+        fail("提示点超过 32 个。", "bad_prompt")
+    if init_mask:
+        if points or box is not None:
+            fail(
+                "自动首帧掩码不能和点或框一起使用。请改用手动 SAM 提示。",
+                "bad_prompt",
+            )
+        init_path = Path(init_mask)
+        if not _inside(init_path, session):
+            fail("首帧掩码必须留在本次会话目录内。", "unsafe_path")
+        if not init_path.is_file():
+            fail("找不到 BiRefNet 首帧掩码。没有开始跟踪。", "missing_init_mask")
+    elif not points and box is None:
+        fail("至少需要一个前景点或一个主体框。", "bad_prompt")
     checkpoint = Path(job["checkpoint"])
     if not checkpoint.is_file():
         fail("找不到 SAM 2.1 权重。本程序不会自动下载。", "missing_checkpoint")
@@ -188,15 +210,6 @@ def segment(job_path: Path) -> None:
     prompt_frame = int(job["frameIndex"])
     if prompt_frame < 0 or prompt_frame >= len(frames):
         fail("提示帧超出抽帧范围。", "bad_prompt")
-    points = job.get("points") or []
-    labels = job.get("labels") or []
-    box = job.get("box")
-    if points and len(points) != len(labels):
-        fail("前景/背景点与标签数量不一致。", "bad_prompt")
-    if not points and box is None:
-        fail("至少需要一个前景点或一个主体框。", "bad_prompt")
-    if len(points) > 32:
-        fail("提示点超过 32 个。", "bad_prompt")
 
     import numpy as np
     import torch
@@ -213,18 +226,29 @@ def segment(job_path: Path) -> None:
         )
         with torch.inference_mode(), context:
             state = predictor.init_state(str(indexed), offload_video_to_cpu=True)
-            kwargs = {
-                "inference_state": state,
-                "frame_idx": prompt_frame,
-                "obj_id": 1,
-                "normalize_coords": True,
-            }
-            if points:
-                kwargs["points"] = np.asarray(points, dtype=np.float32)
-                kwargs["labels"] = np.asarray(labels, dtype=np.int32)
-            if box is not None:
-                kwargs["box"] = np.asarray(box, dtype=np.float32)
-            predictor.add_new_points_or_box(**kwargs)
+            if init_path is not None:
+                loaded = Image.open(init_path).convert("L")
+                if loaded.size != size:
+                    fail("BiRefNet 首帧掩码与抽帧尺寸不一致。", "bad_mask")
+                predictor.add_new_mask(
+                    inference_state=state,
+                    frame_idx=prompt_frame,
+                    obj_id=1,
+                    mask=torch.from_numpy(np.array(loaded) >= 128),
+                )
+            else:
+                kwargs = {
+                    "inference_state": state,
+                    "frame_idx": prompt_frame,
+                    "obj_id": 1,
+                    "normalize_coords": True,
+                }
+                if points:
+                    kwargs["points"] = np.asarray(points, dtype=np.float32)
+                    kwargs["labels"] = np.asarray(labels, dtype=np.int32)
+                if box is not None:
+                    kwargs["box"] = np.asarray(box, dtype=np.float32)
+                predictor.add_new_points_or_box(**kwargs)
             for frame_idx, _obj_ids, video_masks in predictor.propagate_in_video(state):
                 masks[int(frame_idx)] = video_masks
             if prompt_frame > 0:

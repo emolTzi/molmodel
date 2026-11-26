@@ -166,12 +166,12 @@ export async function startReshootPipeline(request: { sourceProjectId: string; r
   return waitForSharedTask(receipt);
 }
 export async function cancelPipeline(): Promise<void> { return invoke("cancel_pipeline"); }
-const defaultSubjectMaskSettings = { python: "python", checkpoint: "", modelCfg: "configs/sam2.1/sam2.1_hiera_t.yaml" };
-export async function getSubjectMaskSettings(): Promise<{ python: string; checkpoint: string; modelCfg: string }> { return inTauri() ? invoke("get_subject_mask_settings") : defaultSubjectMaskSettings; }
-export async function saveSubjectMaskSettings(settings: { python: string; checkpoint: string; modelCfg: string }): Promise<{ python: string; checkpoint: string; modelCfg: string }> { return inTauri() ? invoke("set_subject_mask_settings", { settings }) : settings; }
+const defaultSubjectMaskSettings = { python: "python", checkpoint: "", modelCfg: "configs/sam2.1/sam2.1_hiera_t.yaml", birefnetCheckpoint: "" };
+export async function getSubjectMaskSettings(): Promise<{ python: string; checkpoint: string; modelCfg: string; birefnetCheckpoint: string }> { return inTauri() ? invoke("get_subject_mask_settings") : defaultSubjectMaskSettings; }
+export async function saveSubjectMaskSettings(settings: { python: string; checkpoint: string; modelCfg: string; birefnetCheckpoint: string }): Promise<{ python: string; checkpoint: string; modelCfg: string; birefnetCheckpoint: string }> { return inTauri() ? invoke("set_subject_mask_settings", { settings }) : settings; }
 export async function subjectMaskPreflight(): Promise<{ ok: boolean; message?: string }> { return inTauri() ? invoke("subject_mask_preflight") : { ok: false, message: "SAM 2 is unavailable in this preview." }; }
 export async function prepareSubjectMask(request: { videoPath: string; projectsRoot: string; quality: Quality; generationPolicy: import("../types/pipeline").GenerationPolicy; projection: import("../types/pipeline").VideoProjection }): Promise<{ sessionId: string; frameCount: number; width: number; height: number; previewPngBase64: string }> { return invoke("prepare_subject_mask", { request }); }
-export async function segmentSubjectMask(request: { projectsRoot: string; sessionId: string; frameIndex: number; points: Array<[number, number]>; labels: number[]; boxXyxy: number[] | null }): Promise<{ sessionId: string; promptCoverage: number; dtype: string; previews: Array<{ index: number; framePngBase64: string; maskPngBase64: string }>; trainingNote: string }> { return invoke("segment_subject_mask", { request }); }
+export async function segmentSubjectMask(request: { projectsRoot: string; sessionId: string; frameIndex: number; points: Array<[number, number]>; labels: number[]; boxXyxy: number[] | null; automatic?: boolean }): Promise<{ sessionId: string; promptCoverage: number; dtype: string; previews: Array<{ index: number; framePngBase64: string; maskPngBase64: string }>; trainingNote: string }> { return invoke("segment_subject_mask", { request }); }
 export async function cancelSubjectMask(): Promise<void> { return invoke("cancel_subject_mask"); }
 export async function prepareErrorReport(failureId: string): Promise<ErrorReportDraft> { return invoke("prepare_error_report", { failureId }); }
 export async function sendErrorReport(draftId: string): Promise<ErrorReportReceipt> { return invoke("send_error_report", { draftId }); }

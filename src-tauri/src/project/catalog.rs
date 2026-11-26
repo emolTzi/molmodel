@@ -180,6 +180,9 @@ pub struct SubjectMaskSettings {
     pub python: String,
     pub checkpoint: String,
     pub model_cfg: String,
+    /// Local ZhengPeng7/BiRefNet snapshot. Empty leaves automatic first-pass off.
+    #[serde(default)]
+    pub birefnet_checkpoint: String,
 }
 
 impl Default for SubjectMaskSettings {
@@ -188,6 +191,7 @@ impl Default for SubjectMaskSettings {
             python: "python".into(),
             checkpoint: String::new(),
             model_cfg: "configs/sam2.1/sam2.1_hiera_t.yaml".into(),
+            birefnet_checkpoint: String::new(),
         }
     }
 }
@@ -409,6 +413,11 @@ pub async fn save_subject_mask_settings(subject_mask: SubjectMaskSettings) -> Re
             .any(|c| c.is_control() || matches!(c, '&' | '|' | ';' | '`' | '\n'))
         || subject_mask.model_cfg.chars().any(|c| c.is_control())
         || subject_mask.checkpoint.chars().any(|c| c.is_control())
+        || subject_mask.birefnet_checkpoint.len() > 1024
+        || subject_mask
+            .birefnet_checkpoint
+            .chars()
+            .any(|c| c.is_control())
     {
         return Err(SplatError::Process(
             "单物体分割的 Python 或权重路径无效。".into(),
@@ -956,6 +965,18 @@ mod tests {
         assert!(!serde_json::to_string(&value)
             .unwrap()
             .contains("colmapAcceleration"));
+    }
+
+    #[test]
+    fn old_settings_without_birefnet_leave_the_first_pass_unconfigured() {
+        let with_sam = r#"{"schemaVersion":1,"projectsRoot":"C:/旧目录","subjectMask":{"python":"python","checkpoint":"sam.pt","modelCfg":"configs/sam2.1/sam2.1_hiera_t.yaml"}}"#;
+        let parsed: AppSettings = serde_json::from_str(with_sam).unwrap();
+        assert!(parsed.subject_mask.birefnet_checkpoint.is_empty());
+        assert_eq!(parsed.subject_mask.checkpoint, "sam.pt");
+        let without_feature = r#"{"schemaVersion":1,"projectsRoot":"C:/旧目录"}"#;
+        let parsed: AppSettings = serde_json::from_str(without_feature).unwrap();
+        assert!(parsed.subject_mask.birefnet_checkpoint.is_empty());
+        assert!(parsed.subject_mask.checkpoint.is_empty());
     }
 
     #[test]

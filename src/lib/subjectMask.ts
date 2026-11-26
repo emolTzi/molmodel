@@ -25,6 +25,18 @@ export interface SubjectMaskDraft {
   accepted: boolean;
 }
 
+export type SubjectMaskSegmentMode = "auto" | "manual";
+
+export function segmentSubjectRequest(
+  mode: SubjectMaskSegmentMode,
+  points: Array<[number, number]>,
+  labels: number[],
+  boxXyxy: number[] | null,
+): { automatic: boolean; points: Array<[number, number]>; labels: number[]; boxXyxy: number[] | null } {
+  if (mode === "auto") return { automatic: true, points: [], labels: [], boxXyxy: null };
+  return { automatic: false, points, labels, boxXyxy };
+}
+
 export function restoredSubjectMask(value: unknown): SubjectMaskDraft | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
