@@ -19,6 +19,21 @@ import sys
 import traceback
 from pathlib import Path
 
+
+def _force_utf8_stdio() -> None:
+    """Windows consoles use a legacy code page. The desktop app reads UTF-8 JSON."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
+_force_utf8_stdio()
+
 # Refuse any hub fetch before a later import can touch it.
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"

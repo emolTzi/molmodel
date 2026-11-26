@@ -1155,6 +1155,8 @@ mod tests {
         let sam = std::fs::read_to_string(subject_mask_script("sam2_video.py")).unwrap();
         assert!(sam.contains("add_new_mask"));
         assert!(sam.contains("add_new_points_or_box"));
+        assert!(birefnet.contains("encoding=\"utf-8\""));
+        assert!(sam.contains("encoding=\"utf-8\""));
     }
 
     #[test]
